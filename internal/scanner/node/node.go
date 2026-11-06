@@ -146,6 +146,7 @@ func Detect(relPath, dir string, pkg *PackageJSON, pm domain.PackageManager) *do
 		DefaultPort:    3000,
 		Port:           3000,
 		HostPort:       3000,
+		Dependencies:   pkg.DependencyNames(),
 	}
 	svc.RuntimeVersion = fsutil.MajorVersion(firstNonEmpty(pkg.Engines["node"], fsutil.RuntimeVersionFromFile(filepath.Join(dir, ".nvmrc"))))
 

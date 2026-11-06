@@ -3,7 +3,10 @@
 // the application so every other package may depend on it freely.
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Language identifies the primary language of a service.
 type Language string
@@ -114,6 +117,17 @@ type Service struct {
 	Env                   map[string]string `json:"env,omitempty"`
 	DependsOn             []string          `json:"depends_on,omitempty"`
 	DockerfilePath        string            `json:"dockerfile_path,omitempty"`
+	Dependencies          []string          `json:"dependencies,omitempty"`
+}
+
+// HasDependency reports whether the service declares a dependency (case-insensitive).
+func (s *Service) HasDependency(name string) bool {
+	for _, d := range s.Dependencies {
+		if strings.EqualFold(d, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // HealthcheckSpec describes a container health probe in compose terms.

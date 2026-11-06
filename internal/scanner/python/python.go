@@ -196,6 +196,12 @@ func Detect(relPath, dir string, pyproj *PyProject, pm domain.PackageManager) *d
 	}
 	name = fsutil.SanitizeName(name)
 
+	depList := make([]string, 0, len(deps))
+	for d := range deps {
+		depList = append(depList, d)
+	}
+	sort.Strings(depList)
+
 	svc := &domain.Service{
 		Name:           name,
 		Path:           cleanRel(relPath),
@@ -204,6 +210,7 @@ func Detect(relPath, dir string, pyproj *PyProject, pm domain.PackageManager) *d
 		DefaultPort:    8000,
 		Port:           8000,
 		HostPort:       8000,
+		Dependencies:   depList,
 	}
 	if pyproj != nil {
 		svc.RuntimeVersion = pythonMajorMinor(pyproj.Project.RequiresPython)
