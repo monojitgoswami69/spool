@@ -1,0 +1,24 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+spool
+dist/
+bin/
+
+# Logs
+*.log
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Local scratch
+/tmp/
+*.out
+coverage.txt
