@@ -149,7 +149,7 @@ func Detect(relPath, dir string, pkg *PackageJSON, pm domain.PackageManager) *do
 		HostPort:       3000,
 		Dependencies:   pkg.DependencyNames(),
 	}
-	svc.RuntimeVersion = fsutil.MajorVersion(firstNonEmpty(pkg.Engines["node"], fsutil.RuntimeVersionFromFile(filepath.Join(dir, ".nvmrc"))))
+	svc.RuntimeVersion = detectRuntimeVersion(dir, pkg)
 
 	isWorker := isWorkerName(name, relPath)
 	framework := detectFramework(pkg)
@@ -265,6 +265,45 @@ func Detect(relPath, dir string, pkg *PackageJSON, pm domain.PackageManager) *do
 	}
 
 	return svc
+}
+
+// detectRuntimeVersion honors engines/.nvmrc, but forces Node 24 when the app
+// imports node:sqlite (which is only usable on modern Node).
+func detectRuntimeVersion(dir string, pkg *PackageJSON) string {
+	v := fsutil.MajorVersion(firstNonEmpty(pkg.Engines["node"], fsutil.RuntimeVersionFromFile(filepath.Join(dir, ".nvmrc"))))
+	if usesNodeSQLite(dir) {
+		return "24"
+	}
+	return v
+}
+
+func usesNodeSQLite(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", ".git", "dist", "build", ".next", ".nuxt", ".svelte-kit", "coverage":
+				if path != dir {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs":
+		default:
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), "node:sqlite") {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 var nodePortPatterns = []*regexp.Regexp{

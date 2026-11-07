@@ -41,7 +41,12 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	if err := writeProjectEnv(mgr, lock); err != nil {
 		return err
 	}
-	if out, derr := composeFor(mgr).Down(ctx, false); derr != nil {
+	printEnvStatus(mgr, lock)
+	compose := composeFor(mgr)
+	if err := compose.Validate(ctx); err != nil {
+		return err
+	}
+	if out, derr := compose.Down(ctx, false); derr != nil {
 		return derr
 	} else {
 		verbosef("%s", out)
@@ -52,10 +57,11 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if err := h.VerifyRuntime(ctx); err != nil {
-		logf("%s", ui.ErrorLine("stack did not become healthy after restart"))
+		printFailureReport(mgr, lock, nil, err)
 		return err
 	}
 	lock.LastUp = time.Now()
+	clearFailureLog(mgr)
 	if err := mgr.SaveLock(lock); err != nil {
 		return err
 	}

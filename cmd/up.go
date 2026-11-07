@@ -47,7 +47,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err := writeProjectEnv(mgr, lock); err != nil {
 		return err
 	}
+	printEnvStatus(mgr, lock)
 	compose := composeFor(mgr)
+	if err := compose.Validate(ctx); err != nil {
+		return err
+	}
 	if upBuild {
 		logf("%s", ui.InfoLine("building images"))
 		if out, err := compose.Build(ctx, ""); err != nil {
@@ -69,10 +73,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if err := h.VerifyRuntime(ctx); err != nil {
-		logf("%s", ui.ErrorLine("stack did not become healthy"))
+		printFailureReport(mgr, lock, nil, err)
 		return err
 	}
 	lock.LastUp = time.Now()
+	clearFailureLog(mgr)
 	if err := mgr.SaveLock(lock); err != nil {
 		return err
 	}

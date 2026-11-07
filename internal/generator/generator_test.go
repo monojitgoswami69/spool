@@ -41,7 +41,7 @@ func TestNodeDockerfile(t *testing.T) {
 		Port: 3000, HostPort: 3002, DefaultPort: 3000,
 	}
 	out := GenerateDockerfile(svc, Options{Monorepo: true})
-	for _, want := range []string{"FROM node:20-alpine", "corepack enable", "pnpm install", "EXPOSE 3000", "CMD ["} {
+	for _, want := range []string{"FROM node:22-alpine", "corepack enable", "pnpm install", "EXPOSE 3000", "CMD ["} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in:\n%s", want, out)
 		}

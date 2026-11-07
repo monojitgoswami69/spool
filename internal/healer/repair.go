@@ -13,6 +13,7 @@ import (
 	"github.com/monojitgoswami69/spool/internal/domain"
 	"github.com/monojitgoswami69/spool/internal/llm"
 	"github.com/monojitgoswami69/spool/internal/safefs"
+	"gopkg.in/yaml.v3"
 )
 
 // Change is a single structured patch operation requested by the LLM.
@@ -81,6 +82,19 @@ func ValidateReplacement(file, newContent, original string) []string {
 		for _, bad := range []string{"context: /", "dockerfile: /", "/users/"} {
 			if strings.Contains(lower, bad) {
 				violations = append(violations, "compose contains an absolute path: "+bad)
+			}
+		}
+		var newDoc map[string]any
+		if err := yaml.Unmarshal([]byte(newContent), &newDoc); err != nil {
+			violations = append(violations, "invalid compose YAML: "+err.Error())
+		} else {
+			var oldDoc map[string]any
+			if yaml.Unmarshal([]byte(original), &oldDoc) == nil {
+				for name := range composeServiceNames(oldDoc) {
+					if !composeServiceNames(newDoc)[name] {
+						violations = append(violations, "removes compose service "+name)
+					}
+				}
 			}
 		}
 	}
@@ -236,5 +250,17 @@ func (p *Provenance) Records() []domain.RepairRecord {
 	defer p.mu.Unlock()
 	out := make([]domain.RepairRecord, len(p.records))
 	copy(out, p.records)
+	return out
+}
+
+func composeServiceNames(doc map[string]any) map[string]bool {
+	out := map[string]bool{}
+	services, ok := doc["services"].(map[string]any)
+	if !ok {
+		return out
+	}
+	for name := range services {
+		out[name] = true
+	}
 	return out
 }

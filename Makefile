@@ -1,6 +1,6 @@
 BINARY      := spool
 MODULE      := github.com/monojitgoswami69/spool
-VERSION     ?= v0.2.0
+VERSION     ?= v0.3.0
 BUILD_TIME  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS     := -s -w -X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildTime=$(BUILD_TIME)
 

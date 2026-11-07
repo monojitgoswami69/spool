@@ -68,6 +68,14 @@ func (a *Agent) registerDefaultTools() error {
 			Handler:  a.toolOrchestrateStack,
 		},
 		{
+			Name:        "diagnose_failure",
+			Description: "Analyze recent logs and container state to explain what failed, why, and what to do next.",
+			Parameters: objectSchema(map[string]any{
+				"service": strProp("Optional service name"),
+			}),
+			Handler: a.toolDiagnoseFailure,
+		},
+		{
 			Name:        "inspect_logs_and_health",
 			Description: "Fetch container logs, states, and HTTP readiness for a service.",
 			Parameters: objectSchema(map[string]any{
@@ -224,6 +232,11 @@ func (a *Agent) toolOrchestrateStack(ctx context.Context, args map[string]any) (
 	}
 }
 
+func (a *Agent) toolDiagnoseFailure(ctx context.Context, args map[string]any) (string, error) {
+	service := argString(args, "service")
+	return a.intentDiagnose(ctx, Intent{Kind: IntentDiagnose, Service: service, Project: a.projectName()})
+}
+
 func (a *Agent) toolInspectLogsAndHealth(ctx context.Context, args map[string]any) (string, error) {
 	if a.opts.Compose == nil {
 		return "", fmt.Errorf("no compose controller configured")
@@ -317,4 +330,11 @@ func (a *Agent) toolStartPublicTunnel(ctx context.Context, args map[string]any) 
 	}
 	a.tunnel = t
 	return t.PublicURL(), nil
+}
+
+func (a *Agent) projectName() string {
+	if a.opts.Project == nil {
+		return ""
+	}
+	return a.opts.Project.Name
 }

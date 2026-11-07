@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/monojitgoswami69/spool/internal/config"
+	"github.com/monojitgoswami69/spool/internal/docker"
 	"github.com/monojitgoswami69/spool/internal/domain"
 	"github.com/monojitgoswami69/spool/internal/envvar"
 	"github.com/monojitgoswami69/spool/internal/generator"
@@ -153,6 +154,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	logf("%s", ui.SuccessLine("state persisted"))
+	printEnvStatus(mgr, lock)
+	if docker.Available() {
+		if err := composeFor(mgr).Validate(ctx); err != nil {
+			return fmt.Errorf("generated compose is invalid: %w", err)
+		}
+	}
 
 	if initNoRun {
 		logf("%s", ui.Step(7, 8, "Skipping run (--no-run)"))
@@ -183,15 +190,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	h.MaxTries = 3
 	healRes, err := h.Heal(ctx, "", "")
 	if err != nil {
-		if healRes != nil {
-			for _, a := range healRes.Attempts {
-				logf("  attempt %d [%s] %s", a.N, a.Kind, a.Summary)
-			}
-			logf("%s", ui.ErrorLine(healRes.Summary))
-		}
+		printFailureReport(mgr, lock, healRes, err)
 		return err
 	}
 	lock.LastUp = time.Now()
+	clearFailureLog(mgr)
 	if err := mgr.SaveLock(lock); err != nil {
 		return err
 	}

@@ -111,10 +111,12 @@ func GenerateComposeFile(p *domain.Project, envFile string) (string, error) {
 	}
 	sort.Strings(infraNames)
 
-	context := relFromWorkDir(p.WorkDir, p.SourcePath)
+	monorepo := detectMonorepo(p.SourcePath)
 	for _, app := range p.Services {
+		contextRoot := serviceContextRoot(app, p.SourcePath, monorepo)
+		context := relFromWorkDir(p.WorkDir, contextRoot)
 		dockerfilePath := filepath.Join(p.WorkDir, "Dockerfile."+app.Name)
-		dockerfile := relFromWorkDir(p.SourcePath, dockerfilePath)
+		dockerfile := relFromWorkDir(contextRoot, dockerfilePath)
 		buildArgs := map[string]string{}
 		for _, ev := range p.Env {
 			if isPublicBuildKey(ev.Key) {
@@ -144,12 +146,14 @@ func GenerateComposeFile(p *domain.Project, envFile string) (string, error) {
 				host = app.Port
 			}
 			svc.Ports = []string{fmt.Sprintf("%d:%d", host, app.Port)}
-			svc.Healthcheck = &composeHealthcheck{
-				Test:        []string{"CMD-SHELL", fmt.Sprintf("curl -fsS http://localhost:%d/ >/dev/null || exit 1", app.Port)},
-				Interval:    "10s",
-				Timeout:     "5s",
-				Retries:     6,
-				StartPeriod: "30s",
+			if app.Language != domain.LangDocker {
+				svc.Healthcheck = &composeHealthcheck{
+					Test:        []string{"CMD-SHELL", fmt.Sprintf("curl -fsS http://localhost:%d/ >/dev/null || exit 1", app.Port)},
+					Interval:    "10s",
+					Timeout:     "5s",
+					Retries:     6,
+					StartPeriod: "30s",
+				}
 			}
 		}
 		if len(infraNames) > 0 {

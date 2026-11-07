@@ -21,14 +21,19 @@ const (
 )
 
 var (
-	specificErrorRe = regexp.MustCompile(`(?i)(?:error TS\d+:|Cannot find module|ModuleNotFoundError|ImportError|RuntimeError|Exception|requires a different Python|CRITICAL.*ERROR|No module named|failed to calculate checksum|not found|does not exist|is not defined|is undefined|missing environment variable|failed to collect page data|error occurred prerendering|build error occurred)`)
-	genericErrorRe  = regexp.MustCompile(`(?i)(?:failed to solve|returned a non-zero code|exited with code)`)
+	specificErrorRe = regexp.MustCompile(`(?i)(?:error TS\d+:|Type error:|SyntaxError|Failed to compile|Unexpected token|Cannot find module|ModuleNotFoundError|ImportError|RuntimeError|Exception|requires a different Python|CRITICAL.*ERROR|No module named|failed to calculate checksum|not found|does not exist|is not defined|is undefined|missing environment variable|failed to collect page data|error occurred prerendering|build error occurred)`)
+	hardErrorRe     = regexp.MustCompile(`(?i)(?:error TS\d+:|Type error:|SyntaxError|Unexpected token|Cannot find module|ModuleNotFoundError|ImportError|No module named|requires a different Python)`)
+	genericErrorRe  = regexp.MustCompile(`(?i)(?:failed to solve|returned a non-zero code|exited with code|error: process .* did not complete successfully)`)
+	reasonRe        = regexp.MustCompile(`(?i)(?:error|cannot|can't|failed|failure|undefined|exception|not found|must be|invalid|missing|unable|denied|refused|timed out|timeout)`)
+	noiseRe         = regexp.MustCompile(`(?i)^(?:npm notice|npm warn|added \d+ packages?|done in|view build details|dockerfile\.|------|>|\||\d+ \|)`)
 	stageRe         = regexp.MustCompile(`\[([a-z0-9][a-z0-9_-]*)(?:\s+[a-z0-9_.-]+)?\s+\d+/\d+\]`)
 	fileRefRe       = regexp.MustCompile(`([a-zA-Z0-9_][\w/.-]*\.(?:ts|tsx|js|jsx|py|go|rs|java|rb|php))\((\d+)`)
+	srcRefRe        = regexp.MustCompile(`([a-zA-Z0-9_][\w./-]*\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs)):(\d+):(\d+)`)
 	packageRefRe    = regexp.MustCompile(`(?:Cannot find module|No module named)\s+['"]?([@a-zA-Z0-9_][\w/.-]*)['"]?`)
-	envRefRe        = regexp.MustCompile(`(?i)\b([A-Z][A-Z0-9_]{3,})\b[^\n]*(?:missing|not set|not found|required|not provided)`)
+	envRefRe        = regexp.MustCompile(`\b([A-Z][A-Z0-9_]{2,})\b[^\n]*(?:missing|not set|not found|required|not provided)`)
 	envNotDefinedRe = regexp.MustCompile(`\b([A-Z][A-Z0-9_]{3,})\s+is\s+(?:not\s+defined|undefined)`)
 	portRefRe       = regexp.MustCompile(`:(\d{4,5})\b`)
+	buildkitRe      = regexp.MustCompile(`^#\d+\s+(?:[\d.]+\s+)?`)
 	pythonVersionRe = regexp.MustCompile(`requires a different Python:.*?>=\s*(\d+\.\d+)`)
 )
 
@@ -44,6 +49,9 @@ type Failure struct {
 	EnvRefs     []string `json:"env_refs,omitempty"`
 	PortRefs    []string `json:"port_refs,omitempty"`
 	Progression string   `json:"progression,omitempty"`
+	// Source is true for application-source compilation failures, which Spool
+	// cannot repair by editing generated manifests.
+	Source bool `json:"source,omitempty"`
 }
 
 // Analyze extracts a structured failure from raw build output.
@@ -54,7 +62,9 @@ func Analyze(output, service string) Failure {
 	f.RelevantLog = extractRelevantLog(lines)
 	f.Stage = extractStage(lines, service)
 	f.Category = categorize(f.Error, lines)
-	f.FileRefs = uniqMatches(fileRefRe, output, 1)
+	f.Source = isSourceFailure(f.Error, f.Category)
+	f.FileRefs = append(uniqMatches(fileRefRe, output, 1), uniqMatches(srcRefRe, output, 1)...)
+	f.FileRefs = uniq(f.FileRefs)
 	f.PackageRefs = uniqMatches(packageRefRe, output, 1)
 	f.EnvRefs = append(uniqMatches(envRefRe, output, 1), uniqMatches(envNotDefinedRe, output, 1)...)
 	f.EnvRefs = uniq(f.EnvRefs)
@@ -64,16 +74,35 @@ func Analyze(output, service string) Failure {
 
 func splitLines(s string) []string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.Split(s, "\n")
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = buildkitRe.ReplaceAllString(line, "")
+	}
+	return lines
 }
 
 func extractPrimaryError(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if hardErrorRe.MatchString(line) {
+			return line
+		}
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" || strings.HasPrefix(line, "#") && !strings.Contains(line, "error") {
 			continue
 		}
 		if specificErrorRe.MatchString(line) {
+			return line
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || noiseRe.MatchString(line) || genericErrorRe.MatchString(line) {
+			continue
+		}
+		if reasonRe.MatchString(line) {
 			return line
 		}
 	}
@@ -133,7 +162,9 @@ func categorize(errLine string, lines []string) string {
 	e := strings.ToLower(errLine)
 	all := strings.ToLower(strings.Join(lines, "\n"))
 	switch {
-	case strings.Contains(e, "error ts"):
+	case strings.Contains(e, "error ts"), strings.Contains(e, "type error:"),
+		strings.Contains(e, "syntaxerror"), strings.Contains(e, "failed to compile"),
+		strings.Contains(e, "unexpected token"):
 		return CatCompilation
 	case strings.Contains(e, "copy") && (strings.Contains(e, "not found") || strings.Contains(e, "does not exist") || strings.Contains(e, "checksum")):
 		return CatConfiguration
@@ -163,6 +194,19 @@ func categorize(errLine string, lines []string) string {
 		return CatCompilation
 	}
 	return CatUnknown
+}
+
+func isSourceFailure(errLine, category string) bool {
+	if category != CatCompilation {
+		return false
+	}
+	e := strings.ToLower(errLine)
+	for _, marker := range []string{"type error:", "error ts", "syntaxerror", "failed to compile", "unexpected token"} {
+		if strings.Contains(e, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // Fingerprint is a normalized identity for a failure, used for progression.
@@ -227,5 +271,17 @@ func PythonVersionFromLog(log string) string {
 
 // Summary renders a one-line failure description.
 func (f Failure) Summary() string {
-	return fmt.Sprintf("[%s] %s", f.Category, strings.TrimSpace(f.Error))
+	return fmt.Sprintf("[%s] %s", f.Category, CleanError(f.Error))
+}
+
+var (
+	attemptPrefixRe = regexp.MustCompile(`^attempt \d+ \[[a-z]+\]\s*`)
+	timePrefixRe    = regexp.MustCompile(`^\d+\.\d+\s+`)
+)
+
+// CleanError removes attempt/timestamp prefixes from a log-derived error.
+func CleanError(s string) string {
+	s = attemptPrefixRe.ReplaceAllString(s, "")
+	s = timePrefixRe.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
 }

@@ -42,6 +42,7 @@ func runHeal(cmd *cobra.Command, args []string) error {
 	if err := writeProjectEnv(mgr, lock); err != nil {
 		return err
 	}
+	printEnvStatus(mgr, lock)
 	var client domain.LLMClient
 	if c, lerr := llmFor(true); lerr == nil {
 		client = c
@@ -54,15 +55,11 @@ func runHeal(cmd *cobra.Command, args []string) error {
 	}
 	h.MaxTries = healTries
 	res, herr := h.Heal(ctx, "", "")
-	if res != nil {
-		for _, a := range res.Attempts {
-			logf("  attempt %d [%s] %s", a.N, a.Kind, a.Summary)
-		}
-	}
 	if herr != nil {
-		logf("%s", ui.ErrorLine(res.Summary))
+		printFailureReport(mgr, lock, res, herr)
 		return herr
 	}
+	clearFailureLog(mgr)
 	logf("%s", ui.SuccessLine(res.Summary))
 	showStatus(ctx, mgr, lock)
 	printURLs(lock)

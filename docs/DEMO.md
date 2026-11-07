@@ -59,6 +59,7 @@ spool ask "explain the topology"
 spool ask "show environment for portfolio-website"
 spool ask "check the health"
 spool ask "set GEMINI_MODEL=gemini-3.5-flash-lite on portfolio-website"
+spool ask "why did it fail?"          # diagnosis with evidence + next steps
 spool --yes ask "restart portfolio-website"
 ```
 
@@ -72,6 +73,7 @@ spool chat
 ```
 
 ```text
+diagnose
 why is the api unhealthy?
 logs for web
 use project certify-v2

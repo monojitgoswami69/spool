@@ -429,3 +429,96 @@ func TestVerifyRuntimeCrashLoopFailsFast(t *testing.T) {
 		t.Fatalf("crash loop took %s to fail", elapsed)
 	}
 }
+
+func TestValidateReplacementRejectsInvalidComposeYAML(t *testing.T) {
+	orig := "services:\n  api:\n    build:\n      context: ..\n      args:\n        A: \"1\"\n"
+	bad := "services:\n  api:\n    build:\n      context: ..\n      args:\n        A: \"1\"\n      args:\n        B: \"2\"\n"
+	if v := ValidateReplacement("docker-compose.yml", bad, orig); len(v) == 0 {
+		t.Fatal("expected duplicate-key YAML to be rejected")
+	}
+}
+
+func TestValidateReplacementRejectsServiceRemoval(t *testing.T) {
+	orig := "services:\n  api:\n    image: x\n  db:\n    image: y\n"
+	next := "services:\n  api:\n    image: x\n"
+	if v := ValidateReplacement("docker-compose.yml", next, orig); len(v) == 0 {
+		t.Fatal("expected service removal to be rejected")
+	}
+}
+
+func TestAnalyzeSourceTypeError(t *testing.T) {
+	f := Analyze("./app/page.tsx:4:9\nType error: Type 'string' is not assignable to type 'number'.\nFailed to compile.", "")
+	if f.Category != CatCompilation {
+		t.Fatalf("category = %q", f.Category)
+	}
+	if !f.Source {
+		t.Fatal("expected source failure")
+	}
+	if len(f.FileRefs) == 0 || f.FileRefs[0] != "app/page.tsx" && f.FileRefs[0] != "./app/page.tsx" {
+		t.Fatalf("file refs = %#v", f.FileRefs)
+	}
+	if !strings.Contains(f.Error, "Type error") {
+		t.Fatalf("primary error = %q", f.Error)
+	}
+}
+
+func TestHealSourceErrorDoesNotCallLLMOrPatch(t *testing.T) {
+	compose := &fakeCompose{outputs: []buildOut{{
+		out: "./app/page.tsx:4:9\nType error: Type 'string' is not assignable to type 'number'.\nFailed to compile.",
+		err: errBuild,
+	}}}
+	llmClient := &fakeLLM{response: `{"changes":[{"operation":"replace_exact","file":"Dockerfile","anchor":"RUN npm ci","content":"RUN npm install"}]}`}
+	h := newHealerTest(t, "FROM node:22-alpine\nRUN npm ci\n", compose, llmClient)
+	res, err := h.Heal(context.Background(), "", "api")
+	if err == nil {
+		t.Fatal("expected source error")
+	}
+	if llmClient.calls != 0 {
+		t.Fatalf("LLM must not be called for source errors (calls=%d)", llmClient.calls)
+	}
+	if res == nil || !strings.Contains(res.Summary, "source compilation error") {
+		t.Fatalf("summary = %#v", res)
+	}
+	got, _ := h.WorkJail.ReadFile("Dockerfile.api")
+	if strings.Contains(string(got), "npm install") {
+		t.Fatalf("Dockerfile must not be patched:\n%s", got)
+	}
+	if !strings.Contains(string(got), "npm ci") {
+		t.Fatalf("Dockerfile changed unexpectedly:\n%s", got)
+	}
+}
+
+func TestAnalyzeStripsBuildKitPrefix(t *testing.T) {
+	out := "#14 233.5 The \"id\" argument must be of type string. Received undefined\n#14 ERROR: process \"/bin/sh -c cd /app && npm run build\" did not complete successfully: exit code: 1"
+	f := Analyze(out, "web")
+	if strings.HasPrefix(f.Error, "#") {
+		t.Fatalf("BuildKit prefix leaked into primary error: %q", f.Error)
+	}
+	if !strings.Contains(f.Error, "must be of type string") {
+		t.Fatalf("expected the real error, got %q", f.Error)
+	}
+}
+
+func TestHealRollsBackFailedPatches(t *testing.T) {
+	fail := buildOut{out: "some unknown build failure", err: errBuild}
+	compose := &fakeCompose{outputs: []buildOut{fail, fail, fail, fail, fail, fail}}
+	llmClient := &fakeLLM{response: `{"changes":[{"operation":"replace_exact","file":"Dockerfile","anchor":"RUN npm ci","content":"RUN npm install"}]}`}
+	h := newHealerTest(t, "FROM node:22-alpine\nRUN npm ci\n", compose, llmClient)
+	_, err := h.Heal(context.Background(), "", "api")
+	if err == nil {
+		t.Fatal("expected heal failure")
+	}
+	got, _ := h.WorkJail.ReadFile("Dockerfile.api")
+	if !strings.Contains(string(got), "RUN npm ci") || strings.Contains(string(got), "RUN npm install") {
+		t.Fatalf("failed heal left experimental patches behind:\n%s", got)
+	}
+	foundRollback := false
+	for _, r := range h.Provenance.Records() {
+		if r.Operation == "rollback" {
+			foundRollback = true
+		}
+	}
+	if !foundRollback {
+		t.Fatal("expected a rollback provenance record")
+	}
+}

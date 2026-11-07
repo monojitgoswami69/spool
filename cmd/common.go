@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -192,4 +193,34 @@ func checkDaemon(ctx context.Context) error {
 		return domain.E(domain.KindDocker, "doctor", "the Docker daemon is not running", nil)
 	}
 	return nil
+}
+
+// printEnvStatus surfaces unresolved configuration right after init/update so a
+// developer knows exactly what to set.
+func printEnvStatus(mgr *state.Manager, lock *domain.Lock) {
+	merged, err := renderEnv(mgr, lock)
+	if err != nil {
+		return
+	}
+	var missing []string
+	for _, ev := range lock.Env {
+		if strings.HasSuffix(ev.Key, "_") {
+			continue
+		}
+		if strings.TrimSpace(merged[ev.Key]) == "" {
+			missing = append(missing, ev.Key)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	sort.Strings(missing)
+	shown := missing
+	extra := ""
+	if len(shown) > 10 {
+		extra = fmt.Sprintf(" (+%d more)", len(shown)-10)
+		shown = shown[:10]
+	}
+	logf("%s", ui.WarningLine(fmt.Sprintf("%d variable(s) still unset: %s%s", len(missing), strings.Join(shown, ", "), extra)))
+	logf("%s", ui.InfoLine(fmt.Sprintf("set them with: spool env %s set KEY=VALUE", mgr.ID)))
 }

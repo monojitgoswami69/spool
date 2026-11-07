@@ -18,14 +18,16 @@ var (
 
 	noColor bool
 
-	TitleStyle   = lipgloss.NewStyle().Bold(true).Foreground(primary)
-	BoldStyle    = lipgloss.NewStyle().Bold(true)
-	SuccessStyle = lipgloss.NewStyle().Foreground(success)
-	WarnStyle    = lipgloss.NewStyle().Foreground(warning)
-	ErrorStyle   = lipgloss.NewStyle().Foreground(errColor)
-	MutedStyle   = lipgloss.NewStyle().Foreground(muted)
-	LinkStyle    = lipgloss.NewStyle().Foreground(highlight).Underline(true)
-	BoxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primary).Padding(0, 1)
+	TitleStyle     = lipgloss.NewStyle().Bold(true).Foreground(primary)
+	BoldStyle      = lipgloss.NewStyle().Bold(true)
+	SuccessStyle   = lipgloss.NewStyle().Foreground(success)
+	WarnStyle      = lipgloss.NewStyle().Foreground(warning)
+	ErrorStyle     = lipgloss.NewStyle().Foreground(errColor)
+	MutedStyle     = lipgloss.NewStyle().Foreground(muted)
+	LinkStyle      = lipgloss.NewStyle().Foreground(highlight).Underline(true)
+	HighlightStyle = lipgloss.NewStyle().Foreground(highlight).Bold(true)
+	BoxStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primary).Padding(0, 1)
+	InputBoxStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(primary).Padding(0, 1)
 )
 
 // SetNoColor disables color output.
@@ -39,7 +41,9 @@ func SetNoColor() {
 	ErrorStyle = lipgloss.NewStyle()
 	MutedStyle = lipgloss.NewStyle()
 	LinkStyle = lipgloss.NewStyle()
+	HighlightStyle = lipgloss.NewStyle().Bold(true)
 	BoxStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(0, 1)
+	InputBoxStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(0, 1)
 }
 
 // Banner renders the application banner.

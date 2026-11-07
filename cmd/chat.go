@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -67,6 +68,7 @@ type chatModel struct {
 	lock    *domain.Lock
 
 	input    textinput.Model
+	spin     spinner.Model
 	messages []chatMessage
 	events   []string
 	busy     bool
@@ -81,14 +83,19 @@ type chatModel struct {
 }
 
 func (m *chatModel) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, m.spin.Tick)
 }
 
 func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.input.Width = m.chatWidth() - 8
 		return m, nil
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 	case agentEventMsg:
 		m.events = append(m.events, formatEvent(msg.ev))
 		if len(m.events) > 8 {
@@ -210,7 +217,8 @@ func (m *chatModel) slash(input string) tea.Cmd {
 		m.messages = append(m.messages, chatMessage{role: "assistant", text: strings.Join([]string{
 			"Talk naturally, or use slash commands:",
 			"· status / what's running    · health",
-			"· explain / topology          · logs [service]",
+			"· diagnose / why did it fail  · logs [service]",
+			"· explain / topology          · env",
 			"· env / set KEY=VALUE         · unset KEY",
 			"· heal / fix it               · up / down / restart",
 			"· nuke (confirmation required)",
@@ -223,6 +231,20 @@ func (m *chatModel) slash(input string) tea.Cmd {
 	case "/clear":
 		m.messages = nil
 		return nil
+	case "/diagnose":
+		if m.ag == nil {
+			m.messages = append(m.messages, chatMessage{role: "assistant", text: "No agent is available."})
+			return nil
+		}
+		m.busy = true
+		return runIntentCmd(m.ctx, m.ag, "diagnose", m.intentContext())
+	case "/env":
+		if m.ag == nil {
+			m.messages = append(m.messages, chatMessage{role: "assistant", text: "No agent is available."})
+			return nil
+		}
+		m.busy = true
+		return runIntentCmd(m.ctx, m.ag, "show environment", m.intentContext())
 	case "/status":
 		if m.mgr == nil || m.lock == nil {
 			m.messages = append(m.messages, chatMessage{role: "assistant", text: "No project loaded."})
@@ -384,58 +406,126 @@ func shortArgs(args map[string]any) string {
 	return "(" + s + ")"
 }
 
+func (m *chatModel) chatWidth() int {
+	width := m.width
+	if width <= 0 {
+		width = 100
+	}
+	cw := width - 6
+	if cw > 110 {
+		cw = 110
+	}
+	if cw < 24 {
+		cw = 24
+	}
+	return cw
+}
+
 func (m *chatModel) View() string {
-	var b strings.Builder
-	b.WriteString(ui.Banner(Version))
+	width := m.width
+	if width < 30 {
+		width = 30
+	}
+	height := m.height
+	if height < 12 {
+		height = 12
+	}
+	contentW := m.chatWidth()
+
+	header := ui.TitleStyle.Render("◆ Spool")
+	var meta []string
 	if m.lock != nil {
-		b.WriteString(ui.MutedStyle.Render("  ·  " + m.lock.Project))
+		meta = append(meta, ui.BoldStyle.Render(m.lock.Project))
 	}
 	if m.provider != "" {
-		b.WriteString(ui.MutedStyle.Render("  ·  " + m.provider + "/" + m.modelName))
+		meta = append(meta, ui.MutedStyle.Render(m.provider+"/"+m.modelName))
 	}
-	b.WriteString("\n")
-	b.WriteString(ui.MutedStyle.Render(strings.Repeat("─", max(20, m.width))) + "\n")
+	if len(meta) > 0 {
+		header += ui.MutedStyle.Render("   ") + strings.Join(meta, ui.MutedStyle.Render("  ·  "))
+	}
+	rule := ui.MutedStyle.Render(strings.Repeat("─", contentW))
 
-	wrap := lipgloss.NewStyle().Width(max(30, m.width-6))
-	var lines []string
-	for _, msg := range m.messages {
-		switch msg.role {
-		case "you":
-			lines = append(lines, ui.BoldStyle.Render("You")+"  "+wrap.Render(msg.text))
-		default:
-			lines = append(lines, ui.SuccessStyle.Render("Spool")+"  "+wrap.Render(ui.Markdown(msg.text)))
-		}
-	}
+	body := m.renderTranscript(contentW)
 	if len(m.events) > 0 {
-		lines = append(lines, "")
+		body = append(body, "")
 		for _, e := range m.events {
 			if e != "" {
-				lines = append(lines, e)
+				body = append(body, "  "+e)
 			}
 		}
 	}
-	available := m.height - 8
-	if available < 5 {
-		available = 5
-	}
-	joined := strings.Split(strings.Join(lines, "\n"), "\n")
-	if len(joined) > available {
-		joined = joined[len(joined)-available:]
-	}
-	b.WriteString(strings.Join(joined, "\n") + "\n\n")
 
+	var bottom []string
 	if m.pending != nil {
-		warn := "destructive"
-		if !m.pending.destructive {
-			warn = "mutating"
+		kind := "mutating"
+		style := ui.WarnStyle
+		if m.pending.destructive {
+			kind = "DESTRUCTIVE"
+			style = ui.ErrorStyle
 		}
-		b.WriteString(ui.WarnStyle.Render(fmt.Sprintf("Allow %s (%s tool)? [y/N] ", m.pending.tool, warn)) + "\n")
-	} else if m.busy {
-		b.WriteString(ui.MutedStyle.Render("working…") + "\n")
+		bottom = append(bottom, style.Render(fmt.Sprintf("⚠ Allow %s (%s)?  [y/N]", m.pending.tool, kind)))
 	}
-	b.WriteString(ui.TitleStyle.Render("› ") + m.input.View() + "\n")
-	b.WriteString(ui.KeyHints([][2]string{{"enter", "send"}, {"/help", "commands"}, {"ctrl-c", "quit"}}))
-	return b.String()
+	if m.busy && m.pending == nil {
+		bottom = append(bottom, "  "+m.spin.View()+" "+ui.MutedStyle.Render("working…"))
+	}
+
+	m.input.Width = contentW - 8
+	if m.input.Width < 12 {
+		m.input.Width = 12
+	}
+	inputBox := ui.InputBoxStyle.Copy().Width(contentW - 2).Render(m.input.View())
+	bottom = append(bottom, inputBox)
+	bottom = append(bottom, ui.MutedStyle.Render("enter send  ·  /help commands  ·  /diagnose  ·  ctrl-c quit"))
+
+	bottomHeight := len(bottom) + 1
+	baseHeight := 2 // header + rule
+	avail := height - baseHeight - bottomHeight
+	if avail < 3 {
+		avail = 3
+	}
+	if len(body) > avail {
+		body = body[len(body)-avail:]
+	}
+	for len(body) < avail {
+		body = append(body, "")
+	}
+
+	lines := []string{header, rule}
+	lines = append(lines, body...)
+	lines = append(lines, "")
+	lines = append(lines, bottom...)
+	content := strings.Join(lines, "\n")
+	block := lipgloss.NewStyle().Width(contentW).Render(content)
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, block)
+}
+
+func (m *chatModel) renderTranscript(width int) []string {
+	var lines []string
+	for _, msg := range m.messages {
+		if msg.role == "you" {
+			lines = append(lines, ui.HighlightStyle.Render("› You"))
+			lines = append(lines, indentLines(wrapText(msg.text, width-2), "  ")...)
+		} else {
+			lines = append(lines, ui.TitleStyle.Render("◆ Spool"))
+			lines = append(lines, indentLines(wrapText(ui.Markdown(msg.text), width-2), "  ")...)
+		}
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func wrapText(text string, width int) []string {
+	if width < 10 {
+		width = 10
+	}
+	return strings.Split(lipgloss.NewStyle().Width(width).Render(text), "\n")
+}
+
+func indentLines(lines []string, prefix string) []string {
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return lines
 }
 
 func max(a, b int) int {
@@ -482,7 +572,12 @@ func runChat(cmd *cobra.Command, args []string) error {
 	m.input.Placeholder = "ask spool to scan, fix, explain, or run something…"
 	m.input.CharLimit = 2000
 	m.input.Width = 80
+	m.input.Placeholder = "Ask Spool anything — status, why it failed, fix it, explain…"
+	m.input.Prompt = "› "
+	m.input.PromptStyle = ui.TitleStyle
 	m.input.Focus()
+	m.spin = spinner.New()
+	m.spin.Spinner = spinner.Pulse
 
 	ag, err := buildChatAgent(client, mgr, lock, m.eventHandler(), m.confirmHandler())
 	if err != nil {
@@ -490,9 +585,9 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 	m.ag = ag
 	defer ag.Close()
-	welcome := "Tell me what you want in plain language. I will restate the intent first, then act. Try `/help`."
+	welcome := "I am an agent with real tools: scan, infer, generate manifests, orchestrate, inspect logs/health, diagnose failures, heal, explain topology, manage env, read repo files, and open tunnels. Ask naturally — I restate the intent before acting. Try `/help`."
 	if client == nil {
-		welcome = "LLM is not configured, so I am in deterministic intent mode: status, health, explain, logs, env, heal, up/down/restart, nuke, scan, tunnel, file reads. Try `/help`."
+		welcome = "LLM is not configured, so I am in deterministic intent mode: status, health, diagnose, explain, logs, env, heal, up/down/restart, nuke, scan, tunnel, file reads. Try `/help`."
 	}
 	m.messages = append(m.messages, chatMessage{role: "assistant", text: welcome})
 

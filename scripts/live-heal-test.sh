@@ -78,9 +78,45 @@ PY
 run_case llm-runtime-heal 'application'
 run_case llm-build-heal 'git'
 
+run_failure_case() {
+  name=unfixable-source
+  log="/tmp/heal-$name.log"
+  echo
+  echo "=============================================================="
+  echo "CASE: $name (expected to fail honestly)"
+  echo "=============================================================="
+  if timeout 600 "$BIN" --no-color init "$ROOT/test/fixtures/$name" >"$log" 2>&1; then
+    echo "FAIL: expected init to exit non-zero"
+    fail=1
+    return
+  fi
+  if ! grep -q "stack could not be brought up" "$log"; then
+    echo "FAIL: missing actionable failure summary"
+    fail=1
+  fi
+  if ! grep -q "NEXT STEPS" "$log"; then
+    echo "FAIL: missing next steps"
+    fail=1
+  fi
+  proj=$(grep -oE 'manifest\(s\) in .*' "$log" | head -1 | sed 's/.* in //')
+  if [ -n "${proj:-}" ]; then
+    if ! (cd "$proj" && docker compose -f docker-compose.yml config --quiet); then
+      echo "FAIL: compose left invalid"
+      fail=1
+    fi
+    if grep -qE 'ignoreBuildErrors|no-type-check|npm install -g|NEXT_TELEMETRY' "$proj"/Dockerfile.* 2>/dev/null; then
+      echo "FAIL: forbidden/failed patch left in Dockerfile"
+      fail=1
+    fi
+  fi
+  echo "expected failure: reported cleanly, manifests rolled back"
+}
+
+run_failure_case
+
 echo
 if [ "$fail" -eq 0 ]; then
-  echo "LIVE HEAL TEST: PASS (both failures were repaired by the LLM agent)"
+  echo "LIVE HEAL TEST: PASS (LLM repaired both failures; unfixable case failed cleanly)"
 else
   echo "LIVE HEAL TEST: FAIL"
 fi

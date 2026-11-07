@@ -11,6 +11,7 @@ import (
 	"github.com/monojitgoswami69/spool/internal/domain"
 	"github.com/monojitgoswami69/spool/internal/envvar"
 	"github.com/monojitgoswami69/spool/internal/graph"
+	"github.com/monojitgoswami69/spool/internal/healer"
 	"github.com/monojitgoswami69/spool/internal/httpcheck"
 	"github.com/monojitgoswami69/spool/internal/llm"
 )
@@ -23,6 +24,7 @@ const (
 	IntentHealth        IntentKind = "health"
 	IntentExplain       IntentKind = "explain"
 	IntentLogs          IntentKind = "logs"
+	IntentDiagnose      IntentKind = "diagnose"
 	IntentEnvList       IntentKind = "env_list"
 	IntentEnvSet        IntentKind = "env_set"
 	IntentEnvUnset      IntentKind = "env_unset"
@@ -117,6 +119,8 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 		it.Kind, it.Confidence = IntentNuke, 0.95
 	case containsAny(lower, "restart", "reboot"):
 		it.Kind, it.Confidence = IntentRestart, 0.9
+	case containsAny(lower, "diagnose", "why did", "why is", "why does", "what failed", "what went wrong", "root cause", "debug"):
+		it.Kind, it.Confidence = IntentDiagnose, 0.92
 	case hasWord(lower, "heal") || containsAny(lower, "self-heal", "self heal", "repair", "fix it", "fix the"):
 		it.Kind, it.Confidence = IntentHeal, 0.9
 	case containsAny(lower, "shut down", "shutdown", "stop the", "stop it", "down", "take down", "take it down", "shut it down", "kill it"):
@@ -241,6 +245,8 @@ func (it Intent) Describe() string {
 		return "explain topology" + target
 	case IntentLogs:
 		return "logs" + target
+	case IntentDiagnose:
+		return "diagnose" + target
 	case IntentEnvList:
 		return "list environment" + target
 	case IntentEnvSet:
@@ -277,7 +283,7 @@ func (it Intent) Describe() string {
 // IsReadOnly reports whether the intent never mutates the stack.
 func (it Intent) IsReadOnly() bool {
 	switch it.Kind {
-	case IntentStatus, IntentHealth, IntentExplain, IntentLogs, IntentEnvList, IntentScan, IntentReadFile, IntentHelp:
+	case IntentStatus, IntentHealth, IntentExplain, IntentLogs, IntentDiagnose, IntentEnvList, IntentScan, IntentReadFile, IntentHelp:
 		return true
 	}
 	return false
@@ -354,6 +360,8 @@ func (a *Agent) dispatchIntent(ctx context.Context, it Intent) (string, error) {
 			return "", domain.E(domain.KindNotFound, "agent.explain", "no project loaded", nil)
 		}
 		return graph.Build(a.opts.Project).Render(), nil
+	case IntentDiagnose:
+		return a.intentDiagnose(ctx, it)
 	case IntentLogs:
 		if a.opts.Compose == nil {
 			return "", domain.E(domain.KindDocker, "agent.logs", "no compose controller", nil)
@@ -505,6 +513,118 @@ func (a *Agent) intentHealth(ctx context.Context, it Intent) (string, error) {
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
+func (a *Agent) intentDiagnose(ctx context.Context, it Intent) (string, error) {
+	if a.opts.Project == nil || a.opts.Compose == nil {
+		return "", domain.E(domain.KindNotFound, "agent.diagnose", "no project or compose controller loaded", nil)
+	}
+	logs, _ := a.opts.Compose.Logs(ctx, it.Service, 300)
+	ps, _ := a.opts.Compose.Ps(ctx)
+	f := healer.Analyze(logs, it.Service)
+	evidenceSource := ""
+	persistedRaw := ""
+	if strings.TrimSpace(logs) == "" || f.Category == healer.CatUnknown {
+		if a.opts.WorkJail != nil {
+			if data, err := a.opts.WorkJail.ReadFile("last-failure.log"); err == nil && len(data) > 0 {
+				persisted := healer.Analyze(string(data), it.Service)
+				if persisted.Category != healer.CatUnknown || strings.TrimSpace(logs) == "" {
+					f = persisted
+					persistedRaw = string(data)
+					evidenceSource = "last recorded build failure"
+				}
+			}
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Diagnosis · %s**\n\n", a.opts.Project.Name)
+	fmt.Fprintf(&b, "- Category: `%s`\n", f.Category)
+	fmt.Fprintf(&b, "- Primary error: %s\n", healer.CleanError(f.Error))
+	if f.Stage != "" {
+		fmt.Fprintf(&b, "- Failing stage/service: `%s`\n", f.Stage)
+	}
+	if len(f.FileRefs) > 0 {
+		fmt.Fprintf(&b, "- Files: `%s`\n", strings.Join(f.FileRefs, "`, `"))
+	}
+	if len(f.EnvRefs) > 0 {
+		fmt.Fprintf(&b, "- Env refs: `%s`\n", strings.Join(f.EnvRefs, "`, `"))
+	}
+	fmt.Fprintf(&b, "- Likely cause: %s\n", diagnoseCause(f.Category))
+	if evidenceSource != "" {
+		fmt.Fprintf(&b, "- Evidence source: %s\n", evidenceSource)
+	}
+
+	for _, c := range ps {
+		if c.State != "running" || strings.EqualFold(c.Health, "unhealthy") {
+			fmt.Fprintf(&b, "- Container **%s**: %s / %s (exit %d)\n", c.Service, c.State, c.Health, c.ExitCode)
+		}
+	}
+
+	evidence := strings.TrimSpace(f.RelevantLog)
+	if evidenceSource != "" {
+		var attempts []string
+		for _, line := range strings.Split(persistedRaw, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "attempt ") {
+				attempts = append(attempts, line)
+			}
+		}
+		if len(attempts) > 0 {
+			evidence = strings.Join(attempts, "\n")
+		}
+	}
+	if evidence == "" {
+		evidence = strings.TrimSpace(healer.Tail(logs, 12))
+	}
+	if evidence != "" {
+		fmt.Fprintf(&b, "\n**Evidence**\n")
+		for _, line := range strings.Split(healer.Tail(evidence, 12), "\n") {
+			fmt.Fprintf(&b, "  %s\n", line)
+		}
+	}
+
+	id := a.opts.Project.ID
+	if id == "" {
+		id = a.opts.Project.Name
+	}
+	fmt.Fprintf(&b, "\n**Next steps**\n")
+	fmt.Fprintf(&b, "- `spool heal %s`\n", id)
+	fmt.Fprintf(&b, "- `spool logs %s%s`\n", id, serviceSuffix(it.Service))
+	fmt.Fprintf(&b, "- `spool env %s`\n", id)
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+func serviceSuffix(service string) string {
+	if service == "" {
+		return ""
+	}
+	return " " + service
+}
+
+func diagnoseCause(category string) string {
+	switch category {
+	case healer.CatDependency:
+		return "a dependency is missing or cannot be resolved inside the container"
+	case healer.CatEnvironment:
+		return "the runtime language/tool version does not match what the app requires"
+	case healer.CatMissingEnv:
+		return "a required environment variable is not set"
+	case healer.CatCompilation:
+		return "application source does not compile (Spool repairs manifests, not source)"
+	case healer.CatNextBuild:
+		return "Next.js failed while building or collecting page data"
+	case healer.CatDockerBuild:
+		return "the container image build failed"
+	case healer.CatRuntime:
+		return "the container started but the application failed at runtime"
+	case healer.CatHealthcheck:
+		return "the container healthcheck did not pass"
+	case healer.CatConfiguration:
+		return "a build/configuration file references a missing path or value"
+	default:
+		return "the root cause is not obvious from the log tail; inspect the evidence below"
+	}
+}
+
 func (a *Agent) intentEnvList(it Intent) (string, error) {
 	if a.opts.Env == nil {
 		return "", domain.E(domain.KindConfig, "agent.env", "environment access is not configured", nil)
@@ -594,6 +714,7 @@ func helpText() string {
 		"- `health` — live HTTP readiness probes",
 		"- `explain` / `topology` — dependency DAG, ports, start order",
 		"- `logs [service]` — recent container logs",
+		"- `diagnose` / `why did it fail` — root-cause analysis with evidence",
 		"- `env` — required variables (secrets masked)",
 		"- `set KEY=VALUE` / `unset KEY` — edit and apply env",
 		"- `heal` — deterministic + LLM repair",

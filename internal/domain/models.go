@@ -17,6 +17,7 @@ const (
 	LangGo     Language = "go"
 	LangRust   Language = "rust"
 	LangStatic Language = "static"
+	LangDocker Language = "docker"
 )
 
 // Framework identifies the web/app framework of a service.
@@ -46,6 +47,7 @@ const (
 	FrameworkRust    Framework = "rust"
 	FrameworkGeneric Framework = "generic"
 	FrameworkStatic  Framework = "static"
+	FrameworkDocker  Framework = "docker"
 )
 
 // PackageManager identifies the dependency manager in use.
@@ -120,6 +122,7 @@ type Service struct {
 	DependsOn             []string          `json:"depends_on,omitempty"`
 	DockerfilePath        string            `json:"dockerfile_path,omitempty"`
 	Dependencies          []string          `json:"dependencies,omitempty"`
+	WorkspaceMember       bool              `json:"workspace_member,omitempty"`
 }
 
 // HasDependency reports whether the service declares a dependency (case-insensitive).

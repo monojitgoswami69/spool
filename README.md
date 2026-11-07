@@ -44,6 +44,11 @@ Spool  The api container is healthy but your web service cannot reach it:
 - **Multi-language detection** — Node/Next/Nuxt/Remix/SvelteKit/Nest/Vite/CRA/Astro/Express/Fastify/Koa, pnpm/npm/yarn/bun workspaces, Python (PEP 621, Poetry, uv, pipenv, requirements), Go modules, and Rust crates.
 - **Infrastructure inference** — Postgres, Redis, MySQL, Mongo, Kafka (KRaft), MinIO, RabbitMQ, Elasticsearch from dependencies and env-var values, with **managed-cloud suppression** (Neon, Supabase, RDS, Upstash, Atlas, Confluent Cloud, and more).
 - **Dynamic port allocation for everything** — apps *and* infra containers get conflict-free host ports (e.g. `5439:5432`) while in-network URLs stay on the standard container port (`postgres:5432`).
+- **Dockerfile-only repos & static sites** — a root `Dockerfile` or `index.html` is enough; no manifest required.
+- **Nested-app safe builds** — per-service build contexts plus managed `.dockerignore` exclusions stop a nested app from poisoning a root build.
+- **Modern Node support** — Node 22 default, auto-upgrades to Node 24 when `node:sqlite` is detected.
+- **Honest failure handling** — real error extraction, persisted failure records, manifest rollback, and actionable next steps.
+- **Agent console & interactive setup** — modern centered chat TUI, a `diagnose` tool, `spool setup` wizard, and interactive missing-env prompts.
 - **Hermetic generated images** — multi-stage Dockerfiles with non-root-friendly runtimes and curl for health probes. **No unconditional PyTorch index**: `download.pytorch.org` is added only when `torch` is actually a dependency.
 - **Real health verification** — container state *and* HTTP readiness are checked; failures are never discarded or reported as success.
 - **Closed-loop healer** — deterministic fast rules first, then an invariant-guarded LLM repair that can only touch generated `Dockerfile.*` / `docker-compose.yml`, with a stale-context guard and SHA-256 provenance in `repairs.json`.
@@ -119,6 +124,7 @@ tunnel tooling.
 | `spool stats [project]` | Live CPU, memory, network, and PID stats |
 | `spool logs [project] [service]` | Tail or stream logs (`-f`, `-n`) |
 | `spool env [project] [set KEY=VALUE \| unset KEY]` | List/required vars or edit overrides (auto-applies) |
+| `spool setup` | Interactive provider/model/key/GitHub wizard with live verification |
 | `spool config [show\|path\|set <key> <value>]` | Inspect or edit global configuration |
 | `spool doctor` | Environment preflight (non-zero exit on critical failures) |
 | `spool completion [bash\|zsh\|fish]` | Shell completion scripts |
@@ -167,6 +173,32 @@ Design rules:
   and `.env` output are stable and diff-friendly.
 - **Honest results**: health failures surface as errors; the healer never prints
   a success banner for a broken stack.
+
+### Agent-first architecture
+
+Spool is not a Docker wrapper with a chatbot bolted on. The agent harness is the
+core:
+
+- **Typed tool registry** — `scan_repository`, `infer_infrastructure`,
+  `synthesize_manifests`, `orchestrate_stack`, `inspect_logs_and_health`,
+  `diagnose_failure`, `heal_service`, `read_repo_file`, `explain_topology`,
+  `start_public_tunnel`.
+- **Intent engine** — every request is parsed into a structured intent
+  (`status`, `diagnose`, `heal`, `env_set`, ...) with project/service
+  validation. High-confidence intents execute tools directly; ambiguous ones
+  ask one clarifying question; open-ended asks fall back to the LLM tool loop.
+- **Grounding** — the agent reads real logs, health probes, topology, env, and
+  jailed repo files. It restates the intent (`🎯`) before acting.
+- **Guardrails** — mutating tools require confirmation; destructive tools are
+  explicitly marked; file access is jailed; patches are invariant-checked.
+- **Closed loop** — diagnose → deterministic fix → LLM repair → rebuild →
+  verify → provenance (and rollback if repair fails).
+
+`spool chat` is a modern, centered, bottom-input agent console with streaming
+tool pills, spinner, confirmation boxes, markdown responses, and slash commands.
+
+`spool env` and `spool setup` are interactive: missing variables are prompted
+one-by-one (secrets masked), and the setup wizard verifies the LLM live.
 
 ### Intent-aware agent
 

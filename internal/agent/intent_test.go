@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/monojitgoswami69/spool/internal/domain"
+	"github.com/monojitgoswami69/spool/internal/safefs"
 )
 
 type fakeCompose struct {
@@ -103,6 +104,7 @@ func TestParseIntentTable(t *testing.T) {
 		{"spin up the app", IntentUp, "demo", "", "", "", 0, 0.85, false},
 		{"check the health", IntentHealth, "demo", "", "", "", 0, 0.9, false},
 		{"restart the web service", IntentRestart, "demo", "web", "", "", 0, 0.9, false},
+		{"why did the build fail", IntentDiagnose, "demo", "", "", "", 0, 0.92, false},
 		{"take it down", IntentDown, "demo", "", "", "", 0, 0.9, false},
 		{"show me the logs", IntentLogs, "demo", "", "", "", 0, 0.9, false},
 		{"tell me a joke", IntentChat, "demo", "", "", "", 0, 0.0, false},
@@ -211,6 +213,20 @@ func TestRunIntentEnvListMasksSecrets(t *testing.T) {
 	}
 }
 
+func TestRunIntentDiagnose(t *testing.T) {
+	compose := &fakeCompose{logs: "./app/page.tsx:4:9\nType error: Type 'string' is not assignable to type 'number'.\nFailed to compile."}
+	a, _ := New(Options{Project: demoProject(), Compose: compose, Budget: DefaultBudget()})
+	res, err := a.RunIntent(context.Background(), "why did the build fail", demoContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Diagnosis", "Type error", "Likely cause", "Next steps", "source"} {
+		if !strings.Contains(res.Final, want) {
+			t.Errorf("diagnosis missing %q:\n%s", want, res.Final)
+		}
+	}
+}
+
 func TestRunIntentLogs(t *testing.T) {
 	compose := &fakeCompose{logs: "line1\nline2"}
 	a, _ := New(Options{Project: demoProject(), Compose: compose, Budget: DefaultBudget()})
@@ -289,5 +305,25 @@ func TestRunIntentEmitsIntentEvent(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected intent event, got %+v", events)
+	}
+}
+
+func TestRunIntentDiagnoseUsesPersistedFailure(t *testing.T) {
+	jail, err := safefs.NewJail(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jail.WriteFile("last-failure.log", []byte("attempt 1 [build] ./app/page.tsx:4:9 Type error: Type 'string' is not assignable to type 'number'."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := New(Options{Project: demoProject(), Compose: &fakeCompose{}, WorkJail: jail, Budget: DefaultBudget()})
+	res, err := a.RunIntent(context.Background(), "why did it fail?", demoContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Diagnosis", "Type error", "last recorded build failure"} {
+		if !strings.Contains(res.Final, want) {
+			t.Errorf("diagnosis missing %q:\n%s", want, res.Final)
+		}
 	}
 }

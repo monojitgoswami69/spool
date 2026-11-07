@@ -322,3 +322,74 @@ func TestPythonDotPythonVersion(t *testing.T) {
 		t.Fatalf("runtime = %q want 3.12", svcs[0].RuntimeVersion)
 	}
 }
+
+func TestWorkspaceMemberFlag(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "package.json", `{"name":"root","private":true,"workspaces":["apps/*"]}`)
+	writeRaw(t, root, "apps/web/package.json", `{"name":"web","dependencies":{"next":"14"},"scripts":{"start":"next start"}}`)
+	svcs, err := ScanRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(svcs) != 1 || !svcs[0].WorkspaceMember {
+		t.Fatalf("expected workspace member, got %+v", svcs)
+	}
+}
+
+func TestDockerfileOnlyService(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "Dockerfile", "FROM nginx:alpine\nEXPOSE 9090\nCMD [\"nginx\",\"-g\",\"daemon off;\"]\n")
+	svcs, err := ScanRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(svcs) != 1 || svcs[0].Language != domain.LangDocker || svcs[0].Port != 9090 {
+		t.Fatalf("unexpected %+v", svcs)
+	}
+}
+
+func TestStaticRootPlusNestedBackend(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "index.html", "<h1>site</h1>")
+	writeRaw(t, root, "services/api/pyproject.toml", "[project]\nname=\"api\"\ndependencies=[\"fastapi\"]\n")
+	writeRaw(t, root, "services/api/main.py", "from fastapi import FastAPI\napp=FastAPI()\n")
+	svcs, err := ScanRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var static, api bool
+	for _, s := range svcs {
+		if s.Language == domain.LangStatic && s.Path == "." {
+			static = true
+		}
+		if s.Path == "services/api" && s.Framework == domain.FrameworkFastAPI {
+			api = true
+		}
+	}
+	if !static || !api {
+		t.Fatalf("expected static root + backend, got %+v", svcs)
+	}
+}
+
+func TestCookiecutterTemplateSkipped(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "cookiecutter.json", `{"project_slug":"x"}`)
+	writeRaw(t, root, "{{cookiecutter.project_slug}}/manage.py", "#!/usr/bin/env python\n")
+	writeRaw(t, root, "{{cookiecutter.project_slug}}/requirements.txt", "Django==5.0\n")
+	if _, err := ScanRepository(root); err == nil {
+		t.Fatal("cookiecutter template must not be detected as a service")
+	}
+}
+
+func TestNodeSQLiteForcesNode24(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "package.json", `{"name":"app","dependencies":{"next":"16"},"scripts":{"start":"next start"}}`)
+	writeRaw(t, root, "src/db.ts", "import { DatabaseSync } from 'node:sqlite';\nexport const db = new DatabaseSync('x.db');\n")
+	svcs, err := ScanRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svcs[0].RuntimeVersion != "24" {
+		t.Fatalf("runtime = %q want 24", svcs[0].RuntimeVersion)
+	}
+}

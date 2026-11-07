@@ -1,6 +1,38 @@
 # Changelog
 
+## v0.3.0
+
+### Agent-first
+- New `diagnose` intent + `diagnose_failure` tool: explains what failed, why,
+  with evidence, container state, and next steps.
+- Persisted `last-failure.log` so diagnosis works after failed builds.
+- LLM healer now rolls back experimental patches when it cannot fix a repo.
+- Strict compose validation (YAML, duplicate keys, service removal) with
+  validation feedback retried by the model.
+- Real error extraction from BuildKit output, including TypeScript/Next errors.
+
+### Compatibility
+- Node 22 default; auto Node 24 when `node:sqlite` is detected.
+- Dockerfile-only repos are supported (existing Dockerfile reused).
+- Static root sites are detected alongside nested backends.
+- Nested independent Node apps build from their own contexts; root builds
+  exclude them via a managed `.dockerignore` block.
+- Cookiecutter/template trees are skipped instead of misdetected.
+- Missing env vars are reported after init/update with an exact set command.
+
+### Experience
+- Modern chat TUI: centered layout, bottom-pinned rounded input, spinner,
+  intent badges, streaming tool pills, confirmation boxes.
+- Interactive `spool setup` wizard with live LLM verification.
+- Interactive `spool env` prompts for missing variables (secrets masked).
+
+### Tests
+- Added live heal proof (runtime repair, build repair, honest failure rollback).
+- Added 8-repo and 23-repo real-repo matrices and public-internet validation.
+- Added scanner/generator/healer/chat tests for all new paths.
+
 ## v0.2.0
+
 
 ### Highlights
 - **Intent-aware agent**: deterministic parser + validated LLM classifier,

@@ -35,7 +35,7 @@ var ignoredDirs = map[string]bool{
 	"coverage": true, "venv": true, ".venv": true, "__pycache__": true,
 	"target": true, "bin": true, "obj": true, ".idea": true, ".vscode": true,
 	"db-scripts": true, "demo-data": true, "contracts": true, "hooks": true,
-	"types": true, "components": true, "migrations": true, ".spool": true,
+	"types": true, "components": true, "migrations": true, ".spool": true, "cookiecutter": true,
 	"examples": true, "example": true, "samples": true, "sample": true,
 	"demo": true, "demos": true, "tutorials": true, "tutorial": true,
 	"benchmarks": true, "benchmark": true, "playground": true,
@@ -92,6 +92,7 @@ func Scan(root string) (*Result, error) {
 			}
 			svc := node.Detect(rel, sub, subPkg, pm)
 			svc.PackageManagerVersion = ver
+			svc.WorkspaceMember = true
 			add(svc)
 		}
 	}
@@ -148,7 +149,7 @@ func Scan(root string) (*Result, error) {
 			continue
 		}
 		name := e.Name()
-		if strings.HasPrefix(name, ".") || ignoredDirs[name] {
+		if skipDirName(name) {
 			continue
 		}
 		if groupingDirs[name] {
@@ -158,7 +159,7 @@ func Scan(root string) (*Result, error) {
 			}
 			sort.Slice(children, func(i, j int) bool { return children[i].Name() < children[j].Name() })
 			for _, c := range children {
-				if !c.IsDir() || strings.HasPrefix(c.Name(), ".") || ignoredDirs[c.Name()] {
+				if !c.IsDir() || skipDirName(c.Name()) {
 					continue
 				}
 				scanDir(name + "/" + c.Name())
@@ -168,14 +169,23 @@ func Scan(root string) (*Result, error) {
 		scanDir(name)
 	}
 
-	if len(services) == 0 {
-		if s := detectStatic(abs); s != nil {
+	hasRoot := false
+	for _, svc := range services {
+		if svc.Path == "." {
+			hasRoot = true
+			break
+		}
+	}
+	if !hasRoot {
+		if s := detectDockerfile(abs); s != nil {
+			add(s)
+		} else if s := detectStatic(abs); s != nil {
 			add(s)
 		}
 	}
 	if len(services) == 0 {
 		return nil, domain.E(domain.KindNotFound, "scanner.Scan",
-			fmt.Sprintf("no supported services detected in %s (looked for package.json, pyproject.toml, go.mod, Cargo.toml)", abs), nil)
+			fmt.Sprintf("no supported services detected in %s. Spool looks for package.json (Node/Next/Vite/Express), pyproject.toml/requirements.txt/Pipfile (FastAPI/Flask/Django), go.mod, Cargo.toml, an index.html static site, or a root Dockerfile. Add a manifest or Dockerfile, or run `spool doctor` to verify the environment.", abs), nil)
 	}
 
 	sort.Slice(services, func(i, j int) bool {
@@ -246,6 +256,35 @@ func detectStatic(root string) *domain.Service {
 		Port:        80,
 		HostPort:    80,
 		StartCmd:    "",
+	}
+}
+
+func skipDirName(name string) bool {
+	if strings.HasPrefix(name, ".") || ignoredDirs[strings.ToLower(name)] {
+		return true
+	}
+	if strings.Contains(name, "{{") || strings.Contains(name, "}}") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(name), "cookiecutter")
+}
+
+// detectDockerfile recognizes a repo that only ships a root Dockerfile.
+func detectDockerfile(root string) *domain.Service {
+	if !fsutil.Exists(filepath.Join(root, "Dockerfile")) {
+		return nil
+	}
+	port := fsutil.DockerfileExpose(root)
+	if port == 0 {
+		port = 8080
+	}
+	name := fsutil.SanitizeName(filepath.Base(root))
+	if name == "" || name == "." {
+		name = "app"
+	}
+	return &domain.Service{
+		Name: name, Path: ".", Language: domain.LangDocker, Framework: domain.FrameworkDocker,
+		DefaultPort: port, Port: port, HostPort: port,
 	}
 }
 

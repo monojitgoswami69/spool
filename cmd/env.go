@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/monojitgoswami69/spool/internal/docker"
 	"github.com/monojitgoswami69/spool/internal/domain"
@@ -105,6 +108,7 @@ func listEnv(mgr *state.Manager, lock *domain.Lock) error {
 	sort.Strings(sorted)
 
 	var rows [][]string
+	var missingKeys []string
 	missing := 0
 	for _, k := range sorted {
 		if strings.HasSuffix(k, "_") {
@@ -122,6 +126,7 @@ func listEnv(mgr *state.Manager, lock *domain.Lock) error {
 		if strings.TrimSpace(val) == "" {
 			status = ui.WarnStyle.Render("missing")
 			missing++
+			missingKeys = append(missingKeys, k)
 		}
 		rows = append(rows, []string{k, maskValue(k, val), status, source})
 	}
@@ -129,9 +134,63 @@ func listEnv(mgr *state.Manager, lock *domain.Lock) error {
 	logf("%s", ui.MutedStyle.Render("file: "+mgr.EnvPath()))
 	if missing > 0 {
 		logf("%s", ui.WarningLine(fmt.Sprintf("%d variable(s) missing. Set one with: spool env %s set KEY=VALUE", missing, mgr.ID)))
+		if isInteractive() && confirm(fmt.Sprintf("Configure %d missing variable(s) now?", missing)) {
+			return configureMissingEnv(mgr, lock, missingKeys)
+		}
 	} else {
 		logf("%s", ui.SuccessLine("all discovered variables are set"))
 	}
+	return nil
+}
+
+// configureMissingEnv prompts for each unresolved variable and applies the
+// overrides to the project env (and to a running stack).
+func configureMissingEnv(mgr *state.Manager, lock *domain.Lock, keys []string) error {
+	reader := bufio.NewReader(os.Stdin)
+	overrides, _ := mgr.LoadOverrides()
+	updated := 0
+	for _, key := range keys {
+		if strings.HasSuffix(key, "_") {
+			continue
+		}
+		label := key
+		if envvar.IsSecretName(key) {
+			label += " (secret)"
+		}
+		fmt.Printf("  %s = ", ui.BoldStyle.Render(label))
+		var val string
+		if envvar.IsSecretName(key) {
+			b, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if err != nil {
+				continue
+			}
+			val = strings.TrimSpace(string(b))
+		} else {
+			line, err := reader.ReadString('\n')
+			if err != nil && line == "" {
+				continue
+			}
+			val = strings.TrimSpace(line)
+		}
+		if val == "" {
+			continue
+		}
+		overrides[key] = val
+		updated++
+	}
+	if updated == 0 {
+		logf("%s", ui.MutedStyle.Render("no changes"))
+		return nil
+	}
+	if err := mgr.SaveOverrides(overrides); err != nil {
+		return err
+	}
+	if err := writeProjectEnv(mgr, lock); err != nil {
+		return err
+	}
+	applyEnvNow(mgr)
+	logf("%s", ui.SuccessLine(fmt.Sprintf("updated %d variable(s)", updated)))
 	return nil
 }
 

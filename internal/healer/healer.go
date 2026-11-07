@@ -5,9 +5,11 @@
 package healer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -61,6 +63,48 @@ type Result struct {
 	FinalLog string    `json:"final_log,omitempty"`
 }
 
+func (h *Healer) snapshotManifests() map[string][]byte {
+	out := map[string][]byte{}
+	if h.WorkJail == nil {
+		return out
+	}
+	entries, err := os.ReadDir(h.WorkJail.Root())
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name != "docker-compose.yml" && !strings.HasPrefix(name, "Dockerfile.") {
+			continue
+		}
+		if data, err := h.WorkJail.ReadFile(name); err == nil {
+			out[name] = data
+		}
+	}
+	return out
+}
+
+func (h *Healer) restoreManifests(originals map[string][]byte) {
+	if h.WorkJail == nil {
+		return
+	}
+	for name, want := range originals {
+		cur, err := h.WorkJail.ReadFile(name)
+		if err == nil && bytes.Equal(cur, want) {
+			continue
+		}
+		if err := h.WorkJail.WriteFile(name, want, 0o644); err == nil {
+			_ = h.Provenance.Record(domain.RepairRecord{
+				File: name, OriginalHash: HashBytes(cur), ResultingHash: HashBytes(want),
+				Operation: "rollback", Summary: "restored generated manifest after failed heal",
+			})
+		}
+	}
+}
+
 func (h *Healer) logf(format string, args ...any) {
 	if h.Logf != nil {
 		h.Logf(format, args...)
@@ -78,6 +122,14 @@ func (h *Healer) Heal(ctx context.Context, initialOutput, failingService string)
 		max = DefaultMaxTries
 	}
 	res := &Result{}
+	originals := h.snapshotManifests()
+	rollback := func(r *Result) *Result {
+		h.restoreManifests(originals)
+		if r != nil {
+			r.Summary = strings.TrimSpace(r.Summary + " (healer changes rolled back)")
+		}
+		return r
+	}
 	var prev *Failure
 	var lastOutput string
 	buildErr := errors.New("initial build failure")
@@ -110,14 +162,14 @@ func (h *Healer) Heal(ctx context.Context, initialOutput, failingService string)
 				}
 				f.Progression = ClassifyProgression(&f, prev)
 				res.Attempts = append(res.Attempts, Attempt{N: attempt, Kind: "runtime", Service: svcName, Summary: f.Summary(), Progression: f.Progression, Duration: time.Since(start)})
-				applied, summary, herr := h.repairOnce(ctx, svcName, f, rtLog, true)
+				applied, summary, herr := h.repairOnce(ctx, svcName, f, rtLog, true, true)
 				if herr != nil {
 					res.Summary = "runtime unhealthy and repair failed"
-					return res, herr
+					return rollback(res), herr
 				}
 				if !applied {
 					res.Summary = "runtime unhealthy; no automatic repair found"
-					return res, domain.E(domain.KindHealth, "healer.Heal", verr.Error(), domain.ErrUnfixable)
+					return rollback(res), domain.E(domain.KindHealth, "healer.Heal", verr.Error(), domain.ErrUnfixable)
 				}
 				h.logf("🔧 %s", summary)
 				prev = &f
@@ -131,16 +183,21 @@ func (h *Healer) Heal(ctx context.Context, initialOutput, failingService string)
 		res.Attempts = append(res.Attempts, Attempt{N: attempt, Kind: "build", Service: svcName, Summary: f.Summary(), Progression: f.Progression, Duration: time.Since(start)})
 		h.logf("× build failed (%s): %s", f.Category, f.Error)
 
-		applied, summary, herr := h.repairOnce(ctx, svcName, f, lastOutput, false)
+		applied, summary, herr := h.repairOnce(ctx, svcName, f, lastOutput, false, !f.Source)
 		if herr != nil {
 			res.Summary = "build failed and repair errored"
 			res.FinalLog = Tail(lastOutput, 80)
-			return res, herr
+			return rollback(res), herr
 		}
 		if !applied {
+			if f.Source {
+				res.Summary = "source compilation error (Spool repairs manifests, not application source)"
+				res.FinalLog = f.RelevantLog
+				return rollback(res), sourceFailureError(f)
+			}
 			res.Summary = "build failed; no automatic repair applies"
 			res.FinalLog = Tail(lastOutput, 80)
-			return res, domain.E(domain.KindDocker, "healer.Heal", f.Summary(), domain.ErrUnfixable)
+			return rollback(res), domain.E(domain.KindDocker, "healer.Heal", f.Summary(), domain.ErrUnfixable)
 		}
 		h.logf("🔧 %s", summary)
 		prev = &f
@@ -158,15 +215,15 @@ func (h *Healer) Heal(ctx context.Context, initialOutput, failingService string)
 		} else {
 			res.Summary = "build succeeded but runtime health failed"
 			res.FinalLog = Tail(lastOutput, 80)
-			return res, domain.E(domain.KindHealth, "healer.Heal", verr.Error(), nil)
+			return rollback(res), domain.E(domain.KindHealth, "healer.Heal", verr.Error(), nil)
 		}
 	}
 	res.Summary = "build failed after repair budget"
 	res.FinalLog = Tail(lastOutput, 80)
-	return res, domain.E(domain.KindDocker, "healer.Heal", res.Summary, err)
+	return rollback(res), domain.E(domain.KindDocker, "healer.Heal", res.Summary, err)
 }
 
-func (h *Healer) repairOnce(ctx context.Context, svcName string, f Failure, output string, runtime bool) (bool, string, error) {
+func (h *Healer) repairOnce(ctx context.Context, svcName string, f Failure, output string, runtime, allowLLM bool) (bool, string, error) {
 	dfName, content, err := h.readDockerfile(svcName)
 	if err != nil {
 		// No Dockerfile to repair: fall through to LLM only if a compose file exists.
@@ -181,7 +238,7 @@ func (h *Healer) repairOnce(ctx context.Context, svcName string, f Failure, outp
 			return true, rule + ": " + summary, nil
 		}
 	}
-	if h.LLM == nil {
+	if h.LLM == nil || !allowLLM {
 		return false, "", nil
 	}
 	applied, summary, err := h.llmRepair(ctx, svcName, dfName, f, output, runtime)
@@ -610,6 +667,7 @@ func (h *Healer) relevantFiles(svcName string) []FileEntry {
 		"requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock", "Pipfile",
 		"go.mod", "Cargo.toml", "tsconfig.json", "next.config.js", "next.config.mjs", "next.config.ts",
 		"vite.config.ts", "vite.config.js", "pnpm-workspace.yaml",
+		".env.example", ".env.sample", ".env.template",
 		"main.py", "app.py", "server.py", "run.py", "wsgi.py", "asgi.py",
 		"index.js", "server.js", "app.js", "main.js", "index.ts", "server.ts", "app.ts", "main.ts"}
 	candidates := append([]string{}, base...)
@@ -677,6 +735,16 @@ func (h *Healer) repairPrompt(svcName, dfName string, f Failure, output, df, com
 const repairSystemPrompt = `You are Spool's senior build-reliability engineer. You repair generated container manifests, never application source code. You are precise, conservative, and return only valid JSON.`
 
 // Tail returns the last n lines of s.
+func sourceFailureError(f Failure) error {
+	detail := strings.TrimSpace(f.Error)
+	if len(f.FileRefs) > 0 {
+		detail = f.FileRefs[0] + ": " + detail
+	}
+	return domain.E(domain.KindValidation, "healer.Heal",
+		"source compilation error (Spool repairs generated manifests, not application source): "+detail+
+			". Fix the source, then run `spool heal <project>`.", nil)
+}
+
 func Tail(s string, n int) string {
 	if n <= 0 {
 		return ""

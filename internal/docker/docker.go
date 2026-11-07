@@ -210,6 +210,13 @@ func (c *Compose) StreamLogs(ctx context.Context, service string) (io.ReadCloser
 	return r, cleanup, nil
 }
 
+// Validate renders the compose file with the Docker CLI to catch schema errors
+// before any build or up.
+func (c *Compose) Validate(ctx context.Context) error {
+	_, err := c.run(ctx, "Validate", "config", "--quiet")
+	return err
+}
+
 // Ps returns parsed container rows.
 func (c *Compose) Ps(ctx context.Context) ([]domain.Container, error) {
 	out, err := c.run(ctx, "Ps", "ps", "--format", "json", "--all")

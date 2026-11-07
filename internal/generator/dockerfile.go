@@ -25,6 +25,8 @@ func GenerateDockerfile(svc *domain.Service, opts Options) string {
 		return generateRust(svc, opts)
 	case domain.LangStatic:
 		return generateStatic(svc)
+	case domain.LangDocker:
+		return generateExistingDockerfile(svc, opts)
 	default:
 		return generateGeneric(svc, opts)
 	}
@@ -37,12 +39,15 @@ func generateNode(svc *domain.Service, opts Options) string {
 	image, corepack := nodeBase(svc)
 	path := serviceDir(svc)
 	workPath := "/app"
-	if path != "." {
-		workPath = "/app/" + path
-	}
-	installDir := workPath
-	if opts.Monorepo {
-		installDir = "/app"
+	installDir := "/app"
+	if !opts.ServiceContext {
+		if path != "." {
+			workPath = "/app/" + path
+		}
+		installDir = workPath
+		if opts.Monorepo {
+			installDir = "/app"
+		}
 	}
 	install := nodeInstall(svc.PackageManager)
 	build := strings.TrimSpace(svc.BuildCmd)
@@ -94,12 +99,15 @@ func generateNodeSPA(svc *domain.Service, opts Options) string {
 	image, corepack := nodeBase(svc)
 	path := serviceDir(svc)
 	workPath := "/app"
-	if path != "." {
-		workPath = "/app/" + path
-	}
-	installDir := workPath
-	if opts.Monorepo {
-		installDir = "/app"
+	installDir := "/app"
+	if !opts.ServiceContext {
+		if path != "." {
+			workPath = "/app/" + path
+		}
+		installDir = workPath
+		if opts.Monorepo {
+			installDir = "/app"
+		}
 	}
 	install := nodeInstall(svc.PackageManager)
 	build := strings.TrimSpace(svc.BuildCmd)
@@ -140,7 +148,7 @@ func generateNodeSPA(svc *domain.Service, opts Options) string {
 func nodeBase(svc *domain.Service) (string, []string) {
 	ver := strings.TrimSpace(svc.RuntimeVersion)
 	if ver == "" {
-		ver = "20"
+		ver = "22"
 	}
 	if svc.PackageManager == domain.PMBun {
 		return "oven/bun:1-alpine", nil
@@ -432,4 +440,12 @@ func generateStatic(svc *domain.Service) string {
 	w("EXPOSE %d", port)
 	w("CMD [\"nginx\", \"-g\", \"daemon off;\"]")
 	return b.String()
+}
+
+func generateExistingDockerfile(svc *domain.Service, opts Options) string {
+	path := filepath.Join(opts.RepoRoot, filepath.FromSlash(serviceDir(svc)), "Dockerfile")
+	if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		return strings.TrimRight(string(data), "\n") + "\n"
+	}
+	return "FROM alpine:3.20\nCMD [\"sh\",\"-c\",\"echo 'no Dockerfile found' && exit 1\"]\n"
 }
