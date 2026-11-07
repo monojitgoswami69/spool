@@ -382,6 +382,16 @@ func (a *Agent) RunIntent(ctx context.Context, text string, ictx IntentContext) 
 		return res, nil
 	}
 
+	// Project-less sessions answer clearly instead of erroring inside a tool.
+	if a.opts.Project == nil && len(ictx.Projects) == 0 {
+		runsProjectLess := intent.Kind == IntentChat || intent.Kind == IntentHelp ||
+			intent.Kind == IntentGreeting || intent.Kind == IntentOnboard || intent.Kind == IntentSwitchProject
+		if !runsProjectLess && !(intent.Kind == IntentScan && intent.Path != "") {
+			res := a.resultFor("No projects are onboarded yet. Use `/onboard <git-url-or-path>` (or `spool init`) to bring one up, and I'll manage it from there.", intent)
+			return res, nil
+		}
+	}
+
 	switch intent.Kind {
 	case IntentChat:
 		if a.opts.LLM == nil {

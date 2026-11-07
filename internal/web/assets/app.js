@@ -9,7 +9,9 @@ const state = {
   projects: [],
   config: null,
   chat: null,
-  project: '',
+  // null = not chosen yet (auto-assign on first load); '' = explicitly
+  // "— no project —" and must never be clobbered by the poll.
+  project: null,
   streaming: false,
   nerdOpen: false,
   nerdMessage: null,
@@ -275,7 +277,7 @@ function renderMarkdown(text) {
 /* --------------------------------------------------------------- projects */
 async function loadProjects() {
   state.projects = await api('/api/projects');
-  if (!state.project) {
+  if (state.project === null) {
     state.project = state.chat?.project_id || state.chat?.project || state.projects[0]?.id || '';
   }
   const current = state.project;
@@ -383,7 +385,7 @@ function renderChatList() {
 async function newChat() {
   const chat = await api('/api/chats', {
     method: 'POST',
-    body: JSON.stringify({ project: state.project }),
+    body: JSON.stringify({ project: state.project || '' }),
   });
   state.chat = chat;
   state.project = resolveProjectValue(chat.project_id || chat.project) || state.project;
@@ -634,7 +636,7 @@ async function send(rawText, opts = {}) {
   try {
     await streamChat({
       chat_id: state.chat.id,
-      project: state.project,
+      project: state.project || '',
       text,
       confirm,
       retry,

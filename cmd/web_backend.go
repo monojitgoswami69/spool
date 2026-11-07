@@ -75,6 +75,7 @@ func (b *localWebBackend) Send(ctx context.Context, req web.ChatRequest, emit fu
 	}
 
 	translated := translateSlash(text)
+	ictx := intentContext()
 	var mgr *state.Manager
 	var lock *domain.Lock
 	var err error
@@ -83,10 +84,25 @@ func (b *localWebBackend) Send(ctx context.Context, req web.ChatRequest, emit fu
 		if err != nil {
 			return nil, err
 		}
-	} else if !isOnboardRequest(translated) {
-		mgr, lock, err = resolveProject("")
-		if err != nil {
-			return &web.Outcome{Final: "No projects yet. Use `/onboard <git-url-or-path>` to bring one up."}, nil
+	} else {
+		// Explicit no-project chat: the agent runs project-less. Onboarding,
+		// help, and greetings work directly. A turn that names a project binds
+		// it for that turn; with exactly one project onboarded, auto-bind it.
+		if parsed := agent.ParseIntent(translated, ictx); parsed.Project != "" &&
+			parsed.Kind != agent.IntentOnboard && parsed.Kind != agent.IntentGreeting &&
+			parsed.Kind != agent.IntentHelp {
+			if m, l, rerr := resolveProject(parsed.Project); rerr == nil {
+				mgr, lock = m, l
+			}
+		}
+		if mgr == nil {
+			managers, lerr := state.List()
+			if lerr == nil && len(managers) == 1 {
+				mgr, lock, err = resolveProject(managers[0].ID)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
@@ -104,7 +120,6 @@ func (b *localWebBackend) Send(ctx context.Context, req web.ChatRequest, emit fu
 	}
 	defer ag.Close()
 
-	ictx := intentContext()
 	if lock != nil {
 		ictx.CurrentProject = lock.Project
 	}
