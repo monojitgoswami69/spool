@@ -74,6 +74,8 @@ type chatModel struct {
 	status   string
 
 	provider, modelName string
+	service             string
+	client              domain.LLMClient
 	width, height       int
 	tunnel              *tunnel.Tunnel
 }
@@ -101,6 +103,17 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{role: "assistant", text: "I hit an error: " + msg.err.Error()})
 		} else if msg.res != nil {
 			m.messages = append(m.messages, chatMessage{role: "assistant", text: msg.res.Final})
+			if msg.res.Intent != nil && msg.res.Intent.Kind == agent.IntentSwitchProject && msg.res.Intent.Project != "" {
+				if mgr, lock, err := resolveProject(msg.res.Intent.Project); err == nil {
+					if ag, aerr := buildChatAgent(m.client, mgr, lock, m.eventHandler(), m.confirmHandler()); aerr == nil {
+						if m.ag != nil {
+							_ = m.ag.Close()
+						}
+						m.mgr, m.lock, m.ag = mgr, lock, ag
+						m.messages = append(m.messages, chatMessage{role: "assistant", text: "Context is now **" + lock.Project + "**."})
+					}
+				}
+			}
 		}
 		return m, nil
 	case slashResultMsg:
@@ -173,17 +186,14 @@ func (m *chatModel) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.busy = true
-	m.status = "thinking…"
-	prompt := text
-	if m.lock != nil {
-		prompt = fmt.Sprintf("Project %s (id %s).\nRequest: %s", m.lock.Project, m.lock.ProjectID, text)
-	}
-	return m, runAgentCmd(m.ctx, m.ag, prompt)
+	m.status = "classifying intent…"
+	ictx := m.intentContext()
+	return m, runIntentCmd(m.ctx, m.ag, text, ictx)
 }
 
-func runAgentCmd(ctx context.Context, ag *agent.Agent, prompt string) tea.Cmd {
+func runIntentCmd(ctx context.Context, ag *agent.Agent, prompt string, ictx agent.IntentContext) tea.Cmd {
 	return func() tea.Msg {
-		res, err := ag.Run(ctx, agent.SystemPrompt, prompt)
+		res, err := ag.RunIntent(ctx, prompt, ictx)
 		return agentDoneMsg{res: res, err: err}
 	}
 }
@@ -198,14 +208,16 @@ func (m *chatModel) slash(input string) tea.Cmd {
 	switch command {
 	case "/help":
 		m.messages = append(m.messages, chatMessage{role: "assistant", text: strings.Join([]string{
-			"Slash commands:",
-			"/status — container and health status",
-			"/explain — dependency topology and port map",
-			"/heal — run the deterministic + LLM repair loop",
-			"/tunnel — open a public preview tunnel",
-			"/nuke then /nuke-confirm — destroy the project",
-			"/clear — clear the transcript",
-			"/help — this message",
+			"Talk naturally, or use slash commands:",
+			"· status / what's running    · health",
+			"· explain / topology          · logs [service]",
+			"· env / set KEY=VALUE         · unset KEY",
+			"· heal / fix it               · up / down / restart",
+			"· nuke (confirmation required)",
+			"· tunnel [port] / preview     · scan <path-or-url>",
+			"· read file <path>            · use project <name>",
+			"",
+			"Slash commands: /status /explain /heal /tunnel /nuke /nuke-confirm /clear /help",
 		}, "\n")})
 		return nil
 	case "/clear":
@@ -336,6 +348,8 @@ func nukeSlashCmd(ctx context.Context, mgr *state.Manager, lock *domain.Lock) te
 
 func formatEvent(ev agent.Event) string {
 	switch ev.Type {
+	case "intent":
+		return ui.TitleStyle.Render("🎯 " + ev.Message)
 	case "tool_start":
 		return ui.TitleStyle.Render("⚡ " + ev.Tool + " " + shortArgs(ev.Args))
 	case "tool_end":
@@ -445,11 +459,14 @@ func runChat(cmd *cobra.Command, args []string) error {
 		lock, _ = mgr.LoadLock()
 	}
 
-	client, err := llmFor(true)
-	if err != nil {
-		return fmt.Errorf("`spool chat` requires an LLM provider: %w", err)
+	client, lerr := llmFor(true)
+	if lerr != nil {
+		client = nil
 	}
-	resolved, _ := configSummary()
+	resolved, rerr := configSummary()
+	if rerr != nil {
+		resolved = providerSummary{provider: "deterministic", model: "no-llm"}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -457,7 +474,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	m := &chatModel{
-		ctx: cctx, cancel: cancel, mgr: mgr, lock: lock,
+		ctx: cctx, cancel: cancel, mgr: mgr, lock: lock, client: client,
 		width: 100, height: 30,
 		provider: resolved.provider, modelName: resolved.model,
 	}
@@ -467,17 +484,43 @@ func runChat(cmd *cobra.Command, args []string) error {
 	m.input.Width = 80
 	m.input.Focus()
 
+	ag, err := buildChatAgent(client, mgr, lock, m.eventHandler(), m.confirmHandler())
+	if err != nil {
+		return err
+	}
+	m.ag = ag
+	defer ag.Close()
+	welcome := "Tell me what you want in plain language. I will restate the intent first, then act. Try `/help`."
+	if client == nil {
+		welcome = "LLM is not configured, so I am in deterministic intent mode: status, health, explain, logs, env, heal, up/down/restart, nuke, scan, tunnel, file reads. Try `/help`."
+	}
+	m.messages = append(m.messages, chatMessage{role: "assistant", text: welcome})
+
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(cctx))
+	m.program = p
+	_, err = p.Run()
+	if m.tunnel != nil {
+		_ = m.tunnel.Close()
+	}
+	return err
+}
+
+// buildChatAgent constructs an agent bound to the given project.
+func buildChatAgent(client domain.LLMClient, mgr *state.Manager, lock *domain.Lock, onEvent func(agent.Event), confirm func(string, bool, map[string]any) bool) (*agent.Agent, error) {
 	opts := agent.Options{
-		LLM:         client,
-		Budget:      agent.DefaultBudget(),
-		AutoApprove: flagYes,
-		Allocator:   portprobe.New(),
+		LLM:          client,
+		Budget:       agent.DefaultBudget(),
+		AutoApprove:  flagYes,
+		Allocator:    portprobe.New(),
+		EventHandler: onEvent,
+		Confirm:      confirm,
 	}
 	if mgr != nil {
 		opts.WorkJail, _ = safefs.NewJail(mgr.Dir)
 		opts.WorkDir = mgr.Dir
 		opts.Compose = composeFor(mgr)
 		opts.Healer, _ = healerFor(mgr, lock, client)
+		opts.Env = chatEnv{mgr: mgr, lock: lock}
 		if lock != nil {
 			opts.RepoRoot = lock.RepoPath
 			opts.Project = projectFor(mgr, lock)
@@ -486,12 +529,19 @@ func runChat(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-	opts.EventHandler = func(ev agent.Event) {
+	return agent.New(opts)
+}
+
+func (m *chatModel) eventHandler() func(agent.Event) {
+	return func(ev agent.Event) {
 		if m.program != nil {
 			m.program.Send(agentEventMsg{ev: ev})
 		}
 	}
-	opts.Confirm = func(tool string, destructive bool, a map[string]any) bool {
+}
+
+func (m *chatModel) confirmHandler() func(string, bool, map[string]any) bool {
+	return func(tool string, destructive bool, a map[string]any) bool {
 		if flagYes {
 			return true
 		}
@@ -509,22 +559,70 @@ func runChat(cmd *cobra.Command, args []string) error {
 			return false
 		}
 	}
-	ag, err := agent.New(opts)
+}
+
+func (m *chatModel) projectName() string {
+	if m.lock == nil {
+		return ""
+	}
+	return m.lock.Project
+}
+
+func (m *chatModel) intentContext() agent.IntentContext {
+	ictx := agent.IntentContext{CurrentProject: m.projectName(), CurrentService: m.service}
+	managers, err := state.List()
 	if err != nil {
+		return ictx
+	}
+	for _, mm := range managers {
+		lock, err := mm.LoadLock()
+		if err != nil || lock == nil {
+			continue
+		}
+		info := agent.ProjectInfo{ID: mm.ID, Name: lock.Project}
+		for _, svc := range lock.Services {
+			info.Services = append(info.Services, svc.Name)
+		}
+		ictx.Projects = append(ictx.Projects, info)
+	}
+	return ictx
+}
+
+// chatEnv adapts project state to the agent's EnvAccess interface.
+type chatEnv struct {
+	mgr  *state.Manager
+	lock *domain.Lock
+}
+
+func (e chatEnv) List() (map[string]string, error) { return renderEnv(e.mgr, e.lock) }
+
+func (e chatEnv) Set(key, value string) error {
+	overrides, _ := e.mgr.LoadOverrides()
+	overrides[key] = value
+	if err := e.mgr.SaveOverrides(overrides); err != nil {
 		return err
 	}
-	m.ag = ag
-	defer ag.Close()
-	m.messages = append(m.messages, chatMessage{role: "assistant", text: "I can scan repos, infer infrastructure, generate manifests, orchestrate stacks, inspect health, and heal failures. Try `/help` or just describe what you want."})
-
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(cctx))
-	m.program = p
-	_, err = p.Run()
-	if m.tunnel != nil {
-		_ = m.tunnel.Close()
+	if err := writeProjectEnv(e.mgr, e.lock); err != nil {
+		return err
 	}
-	return err
+	applyEnvNow(e.mgr)
+	return nil
 }
+
+func (e chatEnv) Unset(key string) error {
+	overrides, _ := e.mgr.LoadOverrides()
+	overrides[key] = ""
+	if err := e.mgr.SaveOverrides(overrides); err != nil {
+		return err
+	}
+	if err := writeProjectEnv(e.mgr, e.lock); err != nil {
+		return err
+	}
+	applyEnvNow(e.mgr)
+	return nil
+}
+
+func (e chatEnv) Path() string { return e.mgr.EnvPath() }
 
 type providerSummary struct {
 	provider string

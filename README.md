@@ -99,7 +99,8 @@ tunnel tooling.
 | Command | Description |
 |---|---|
 | `spool init [path-or-url]` | Full pipeline: clone → scan → infer → generate → build → heal → verify |
-| `spool chat [project]` | Interactive agent REPL with streaming tool pills |
+| `spool chat [project]` | Interactive, intent-aware agent REPL |
+| `spool ask [project] <request>` | One-shot intent-aware request (prints the parsed intent first) |
 | `spool up [project]` | Start a stack and wait for real health |
 | `spool down [project]` | Stop a stack (`--volumes` removes volumes) |
 | `spool nuke <project>` | Destroy containers, volumes, clone, and state (aliases: `incinerate`, `remove`) |
@@ -154,6 +155,30 @@ Design rules:
   and `.env` output are stable and diff-friendly.
 - **Honest results**: health failures surface as errors; the healer never prints
   a success banner for a broken stack.
+
+### Intent-aware agent
+
+`spool chat` and `spool ask` do not blindly hand text to a model. Every request is
+first parsed into a structured intent (`status`, `health`, `explain`, `logs`,
+`env_set`, `heal`, `nuke`, `tunnel`, ...). High-confidence intents execute
+directly (fast and deterministic); ambiguous or unknown requests fall back to an
+LLM classifier that must return the same schema. The agent:
+
+- restates the intent (`🎯 ...`) before acting,
+- asks one clarifying question when the project/service is ambiguous,
+- validates targets against real projects/services (never invents them),
+- requires confirmation for mutating/destructive actions,
+- executes read-only intents without any LLM call.
+
+`spool ask` is ideal for demos and scripts:
+
+```bash
+spool ask "what is running?"
+spool ask "explain the topology"
+spool ask "show environment"
+spool ask "set JWT_SECRET=dev123 on certify-v2"
+spool --yes ask "nuke certify-v2"
+```
 
 ### Security model
 

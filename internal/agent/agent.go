@@ -51,6 +51,14 @@ type Event struct {
 	Bytes   int            `json:"bytes,omitempty"`
 }
 
+// EnvAccess exposes project environment state to intent dispatch.
+type EnvAccess interface {
+	List() (map[string]string, error)
+	Set(key, value string) error
+	Unset(key string) error
+	Path() string
+}
+
 // Options configures an Agent.
 type Options struct {
 	LLM          domain.LLMClient
@@ -67,6 +75,7 @@ type Options struct {
 	Allocator *portprobe.Allocator
 	RepoRoot  string
 	WorkDir   string
+	Env       EnvAccess
 }
 
 // Result is the outcome of a run.
@@ -76,6 +85,7 @@ type Result struct {
 	Iterations int     `json:"iterations"`
 	ToolCalls  int     `json:"tool_calls"`
 	BytesRead  int     `json:"bytes_read"`
+	Intent     *Intent `json:"intent,omitempty"`
 	Events     []Event `json:"-"`
 }
 
@@ -91,9 +101,6 @@ type Agent struct {
 
 // New constructs an agent and registers the default tool set.
 func New(opts Options) (*Agent, error) {
-	if opts.LLM == nil {
-		return nil, domain.E(domain.KindConfig, "agent.New", "nil LLM client", domain.ErrNotConfigured)
-	}
 	if opts.Budget.MaxIterations == 0 {
 		opts.Budget = DefaultBudget()
 	}
@@ -316,6 +323,8 @@ func summarize(s string) string {
 
 // SystemPrompt is the standing instruction for the Spool agent.
 const SystemPrompt = `You are Spool, an autonomous infrastructure control-plane agent.
+Before acting, restate the user's intent in one sentence and identify the target project/service.
+If the request is ambiguous, ask exactly one clarifying question and do not act.
 You inspect repositories, infer backing services, synthesize container manifests, orchestrate
 stacks, diagnose failures, and heal them. Prefer concrete tools over speculation. Never claim a
 stack is healthy without checking. Only read files through read_repo_file (paths are jailed).

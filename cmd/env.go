@@ -173,6 +173,20 @@ func applyEnvNow(mgr *state.Manager) {
 	if err := checkDaemon(ctx); err != nil {
 		return
 	}
+	ps, err := composeFor(mgr).Ps(ctx)
+	if err != nil {
+		return
+	}
+	running := false
+	for _, c := range ps {
+		if c.State == "running" {
+			running = true
+			break
+		}
+	}
+	if !running {
+		return
+	}
 	if _, err := composeFor(mgr).Up(ctx, "--force-recreate"); err != nil {
 		logf("%s", ui.WarningLine("env written; restart the stack to apply: "+err.Error()))
 		return
