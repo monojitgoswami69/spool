@@ -270,7 +270,7 @@ func (h *Healer) VerifyRuntime(ctx context.Context) error {
 	if h.Compose == nil {
 		return domain.E(domain.KindDocker, "healer.VerifyRuntime", "nil compose", nil)
 	}
-	if _, err := h.Compose.Up(ctx); err != nil {
+	if _, err := h.Compose.Up(ctx, "--remove-orphans"); err != nil {
 		return err
 	}
 	timeout := h.HealthTimeout
