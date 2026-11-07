@@ -182,6 +182,21 @@ LLM classifier that must return the same schema. The agent:
 - requires confirmation for mutating/destructive actions,
 - executes read-only intents without any LLM call.
 
+### Proving the AI healer is real
+
+`make heal-proof` runs two adversarial fixtures with Docker and a live LLM:
+
+1. **Runtime failure** — a FastAPI app defines `application` instead of `app`,
+   so the generated `uvicorn main:app` crashes. The agent reads the logs and
+   the entry file, patches the Dockerfile to `main:application`, rebuilds, and
+   verifies HTTP health.
+2. **Build failure** — a `git+https://...` requirement needs `git`, which the
+   base image omits. The agent adds `git` to the builder's package install,
+   rebuilds, and verifies health.
+
+Each repair is recorded in `repairs.json` with the LLM's diagnosis and SHA-256
+before/after hashes. The script is `scripts/live-heal-test.sh`.
+
 `spool ask` is ideal for demos and scripts:
 
 ```bash
@@ -212,7 +227,9 @@ spool --yes ask "nuke certify-v2"
 ```bash
 make fmt
 make check      # gofmt check + vet + tests + race
-make e2e        # full no-Docker init pipeline test
+make e2e        # full no-Docker init + update pipeline tests
+make heal-proof # live LLM repair of a runtime and a build failure
+bash scripts/repo-matrix.sh  # broad real-repo generation matrix
 make build
 ```
 

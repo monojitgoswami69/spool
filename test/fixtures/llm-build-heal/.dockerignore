@@ -1,0 +1,16 @@
+.git
+.gitignore
+**/node_modules
+**/dist
+**/build
+**/.next
+**/.nuxt
+**/.svelte-kit
+**/target
+**/.venv
+**/venv
+**/__pycache__
+**/*.log
+.env
+.env.*
+!.env.example

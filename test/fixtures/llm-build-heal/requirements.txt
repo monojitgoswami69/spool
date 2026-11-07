@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# Requires the git binary inside the builder image; the base image omits it,
+# so the build fails until the healer adds git to the Dockerfile.
+git+https://github.com/pallets/click.git@8.1.7

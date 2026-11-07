@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ type Healer struct {
 	HTTPCheck     func(ctx context.Context, url string) domain.Result
 	HealthTimeout time.Duration
 	PollInterval  time.Duration
+	// RestartGrace is how long a container may stay in "restarting" before it is
+	// treated as a crash loop. Defaults to 10s.
+	RestartGrace time.Duration
 }
 
 // Attempt records one healing iteration.
@@ -282,14 +286,32 @@ func (h *Healer) VerifyRuntime(ctx context.Context) error {
 		interval = 2 * time.Second
 	}
 	deadline := time.Now().Add(timeout)
+	grace := h.RestartGrace
+	if grace <= 0 {
+		grace = 10 * time.Second
+	}
 	var last string
+	var restartingSince time.Time
 	for {
 		ps, err := h.Compose.Ps(ctx)
 		if err != nil {
 			return err
 		}
-		ready, detail := containerHealth(ps)
+		ready, fatal, restarting, detail := containerHealth(ps)
 		last = detail
+		if restarting {
+			if restartingSince.IsZero() {
+				restartingSince = time.Now()
+			} else if time.Since(restartingSince) > grace {
+				fatal = true
+				detail += " (crash loop)"
+			}
+		} else {
+			restartingSince = time.Time{}
+		}
+		if fatal {
+			return domain.E(domain.KindHealth, "healer.VerifyRuntime", "stack failed: "+detail, nil)
+		}
 		if ready {
 			if h.HTTPCheck != nil && len(h.PortMap) > 0 {
 				httpOK := true
@@ -329,19 +351,25 @@ func (h *Healer) VerifyRuntime(ctx context.Context) error {
 	}
 }
 
-func containerHealth(ps []domain.Container) (bool, string) {
+func containerHealth(ps []domain.Container) (ready, fatal, restarting bool, detail string) {
 	if len(ps) == 0 {
-		return false, "no containers"
+		return false, false, false, "no containers"
 	}
 	for _, c := range ps {
+		if c.State == "exited" || c.State == "dead" {
+			return false, true, false, fmt.Sprintf("%s is %s (exit %d)", c.Service, c.State, c.ExitCode)
+		}
+		if c.State == "restarting" {
+			return false, c.ExitCode != 0, true, fmt.Sprintf("%s is restarting (exit %d)", c.Service, c.ExitCode)
+		}
 		if c.State != "running" {
-			return false, fmt.Sprintf("%s is %s", c.Service, c.State)
+			return false, false, false, fmt.Sprintf("%s is %s", c.Service, c.State)
 		}
 		if strings.EqualFold(c.Health, "unhealthy") {
-			return false, fmt.Sprintf("%s is unhealthy", c.Service)
+			return false, false, false, fmt.Sprintf("%s is unhealthy", c.Service)
 		}
 	}
-	return true, "all containers running"
+	return true, false, false, "all containers running"
 }
 
 // llmRepair performs the invariant-guarded LLM repair with a stale-context guard.
@@ -368,7 +396,7 @@ func (h *Healer) llmRepair(ctx context.Context, svcName, dfName string, f Failur
 	files := h.relevantFiles(svcName)
 	served := map[string]bool{}
 	for round := 1; round <= 3; round++ {
-		prompt := h.repairPrompt(svcName, f, output, df, compose, files, runtime)
+		prompt := h.repairPrompt(svcName, dfName, f, output, df, compose, files, runtime)
 		raw, err := h.LLM.Call(ctx, repairSystemPrompt, prompt)
 		if err != nil {
 			return false, "", err
@@ -417,6 +445,13 @@ func (h *Healer) llmRepair(ctx context.Context, svcName, dfName string, f Failur
 
 		applied, summary, err := h.applyPlan(dfName, plan, f)
 		if err != nil {
+			if domain.IsKind(err, domain.KindValidation) {
+				files = append(files, FileEntry{
+					Path:    "(validation feedback)",
+					Content: err.Error() + "\nUse exactly " + allowedNames(dfName) + " in the \"file\" field and retry with a corrected patch.",
+				})
+				continue
+			}
 			return false, "", err
 		}
 		if applied {
@@ -427,8 +462,36 @@ func (h *Healer) llmRepair(ctx context.Context, svcName, dfName string, f Failur
 }
 
 func (h *Healer) applyPlan(dfName string, plan *RepairPlan, f Failure) (bool, string, error) {
-	applied := false
-	var summaries []string
+	type pending struct {
+		file, content string
+		old           []byte
+		op, summary   string
+	}
+	var writes []pending
+	seen := map[string]bool{}
+
+	add := func(file, content, op, summary string) error {
+		file = normalizeRepairFile(file, dfName)
+		if !AllowedRepairFile(file) {
+			return domain.E(domain.KindValidation, "healer.applyPlan",
+				"refusing to modify "+file+" (writable: "+allowedNames(dfName)+")", nil)
+		}
+		if seen[file] {
+			return domain.E(domain.KindValidation, "healer.applyPlan",
+				"multiple updates to "+file+"; send one patch per file", nil)
+		}
+		old, err := h.WorkJail.ReadFile(file)
+		if err != nil {
+			return domain.E(domain.KindIO, "healer.applyPlan", "read "+file, err)
+		}
+		if violations := ValidateReplacement(file, content, string(old)); len(violations) > 0 {
+			return domain.E(domain.KindValidation, "healer.applyPlan",
+				"invariant violation: "+strings.Join(violations, "; "), nil)
+		}
+		seen[file] = true
+		writes = append(writes, pending{file: file, content: content, old: old, op: op, summary: summary})
+		return nil
+	}
 
 	if strings.TrimSpace(plan.Dockerfile) != "" {
 		target := dfName
@@ -439,43 +502,27 @@ func (h *Healer) applyPlan(dfName string, plan *RepairPlan, f Failure) (bool, st
 				return false, "", domain.E(domain.KindValidation, "healer.applyPlan", "cannot target Dockerfile replacement", nil)
 			}
 		}
-		old, _ := h.WorkJail.ReadFile(target)
-		newContent := llm.CleanContent(plan.Dockerfile)
-		if old != nil {
-			if violations := ValidateReplacement(target, newContent, string(old)); len(violations) > 0 {
-				return false, "", domain.E(domain.KindValidation, "healer.applyPlan", "invariant violation: "+strings.Join(violations, "; "), nil)
-			}
-		}
-		if err := h.WorkJail.WriteFile(target, []byte(newContent), 0o644); err != nil {
+		if err := add(target, llm.CleanContent(plan.Dockerfile), "llm-full-replace", ""); err != nil {
 			return false, "", err
 		}
-		_ = h.Provenance.Record(domain.RepairRecord{Service: f.Service, File: target, OriginalHash: HashBytes(old), ResultingHash: HashBytes([]byte(newContent)), FailureCat: f.Category, Operation: "llm-full-replace"})
-		applied = true
-		summaries = append(summaries, "replaced "+target)
 	}
 
 	if strings.TrimSpace(plan.Compose) != "" {
-		target := "docker-compose.yml"
-		old, _ := h.WorkJail.ReadFile(target)
-		newContent := llm.CleanContent(plan.Compose)
-		if violations := ValidateReplacement(target, newContent, string(old)); len(violations) > 0 {
-			return false, "", domain.E(domain.KindValidation, "healer.applyPlan", "invariant violation: "+strings.Join(violations, "; "), nil)
-		}
-		if err := h.WorkJail.WriteFile(target, []byte(newContent), 0o644); err != nil {
+		if err := add("docker-compose.yml", llm.CleanContent(plan.Compose), "llm-full-replace", ""); err != nil {
 			return false, "", err
 		}
-		_ = h.Provenance.Record(domain.RepairRecord{Service: f.Service, File: target, OriginalHash: HashBytes(old), ResultingHash: HashBytes([]byte(newContent)), FailureCat: f.Category, Operation: "llm-full-replace"})
-		applied = true
-		summaries = append(summaries, "replaced docker-compose.yml")
 	}
 
 	if len(plan.Changes) > 0 {
 		byFile := map[string][]Change{}
 		for _, c := range plan.Changes {
-			if !AllowedRepairFile(c.File) {
-				return false, "", domain.E(domain.KindValidation, "healer.applyPlan", "refusing to modify "+c.File, nil)
+			file := normalizeRepairFile(c.File, dfName)
+			if !AllowedRepairFile(file) {
+				return false, "", domain.E(domain.KindValidation, "healer.applyPlan",
+					"refusing to modify "+c.File+" (writable: "+allowedNames(dfName)+")", nil)
 			}
-			byFile[c.File] = append(byFile[c.File], c)
+			c.File = file
+			byFile[file] = append(byFile[file], c)
 		}
 		names := make([]string, 0, len(byFile))
 		for n := range byFile {
@@ -495,21 +542,60 @@ func (h *Healer) applyPlan(dfName string, plan *RepairPlan, f Failure) (bool, st
 				}
 				content = next
 			}
-			if violations := ValidateReplacement(name, content, string(old)); len(violations) > 0 {
-				return false, "", domain.E(domain.KindValidation, "healer.applyPlan", "invariant violation: "+strings.Join(violations, "; "), nil)
-			}
-			if err := h.WorkJail.WriteFile(name, []byte(content), 0o644); err != nil {
+			if err := add(name, content, "llm-patch", plan.Summary); err != nil {
 				return false, "", err
 			}
-			_ = h.Provenance.Record(domain.RepairRecord{Service: f.Service, File: name, OriginalHash: HashBytes(old), ResultingHash: HashBytes([]byte(content)), FailureCat: f.Category, Operation: "llm-patch", Summary: plan.Summary})
-			applied = true
-			summaries = append(summaries, "patched "+name)
 		}
 	}
-	if !applied {
+
+	if len(writes) == 0 {
 		return false, "", nil
 	}
+
+	// Everything validated; commit the writes atomically per file.
+	var summaries []string
+	for _, w := range writes {
+		if err := h.WorkJail.WriteFile(w.file, []byte(w.content), 0o644); err != nil {
+			return false, "", err
+		}
+		_ = h.Provenance.Record(domain.RepairRecord{
+			Service: f.Service, File: w.file,
+			OriginalHash: HashBytes(w.old), ResultingHash: HashBytes([]byte(w.content)),
+			FailureCat: f.Category, Operation: w.op, Summary: w.summary,
+		})
+		if w.op == "llm-full-replace" {
+			summaries = append(summaries, "replaced "+w.file)
+		} else {
+			summaries = append(summaries, "patched "+w.file)
+		}
+	}
 	return true, strings.Join(summaries, "; "), nil
+}
+
+// normalizeRepairFile maps model-provided names onto the only writable files.
+func normalizeRepairFile(name, dfName string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return name
+	}
+	base := filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	switch {
+	case base == "docker-compose.yml" || base == "docker-compose.yaml":
+		return "docker-compose.yml"
+	case base == "Dockerfile" && dfName != "":
+		return dfName
+	case strings.HasPrefix(base, "Dockerfile.") && dfName != "":
+		return dfName
+	default:
+		return base
+	}
+}
+
+func allowedNames(dfName string) string {
+	if dfName == "" {
+		return "Dockerfile.<service>, docker-compose.yml"
+	}
+	return dfName + ", docker-compose.yml"
 }
 
 // FileEntry is a file included in the repair context.
@@ -523,7 +609,9 @@ func (h *Healer) relevantFiles(svcName string) []FileEntry {
 	base := []string{"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock",
 		"requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock", "Pipfile",
 		"go.mod", "Cargo.toml", "tsconfig.json", "next.config.js", "next.config.mjs", "next.config.ts",
-		"vite.config.ts", "vite.config.js", "pnpm-workspace.yaml"}
+		"vite.config.ts", "vite.config.js", "pnpm-workspace.yaml",
+		"main.py", "app.py", "server.py", "run.py", "wsgi.py", "asgi.py",
+		"index.js", "server.js", "app.js", "main.js", "index.ts", "server.ts", "app.ts", "main.ts"}
 	candidates := append([]string{}, base...)
 	for _, svc := range h.Services {
 		if svcName != "" && svc.Name != svcName {
@@ -562,14 +650,15 @@ func (h *Healer) readRelevantFile(rel string) (FileEntry, bool) {
 	return FileEntry{Path: rel, Content: string(data)}, true
 }
 
-func (h *Healer) repairPrompt(svcName string, f Failure, output, df, compose string, files []FileEntry, runtime bool) string {
+func (h *Healer) repairPrompt(svcName, dfName string, f Failure, output, df, compose string, files []FileEntry, runtime bool) string {
 	var b strings.Builder
 	mode := "BUILD"
 	if runtime {
 		mode = "RUNTIME"
 	}
 	fmt.Fprintf(&b, "A container stack failed during %s. Repair the generated Dockerfile or docker-compose.yml.\n\n", mode)
-	fmt.Fprintf(&b, "FAILING SERVICE: %s\nCATEGORY: %s\nPRIMARY ERROR: %s\n\n", svcName, f.Category, f.Error)
+	fmt.Fprintf(&b, "FAILING SERVICE: %s\nCATEGORY: %s\nPRIMARY ERROR: %s\n", svcName, f.Category, f.Error)
+	fmt.Fprintf(&b, "ALLOWED WRITABLE FILES (use these exact names in \"file\"): %s\n\n", allowedNames(dfName))
 	fmt.Fprintf(&b, "RELEVANT LOG:\n%s\n\n", Tail(f.RelevantLog, 60))
 	if df != "" {
 		fmt.Fprintf(&b, "CURRENT DOCKERFILE:\n%s\n\n", df)

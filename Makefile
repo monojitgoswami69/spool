@@ -4,7 +4,7 @@ VERSION     ?= v0.2.0
 BUILD_TIME  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS     := -s -w -X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildTime=$(BUILD_TIME)
 
-.PHONY: all build test race vet fmt fmt-check check e2e tidy install clean run release help
+.PHONY: all build test race vet fmt fmt-check check e2e heal-proof tidy install clean run release help
 
 all: build
 
@@ -28,8 +28,11 @@ fmt-check: ## Fail if any Go file is not formatted
 
 check: fmt-check vet test race ## Run the full verification suite
 
-e2e: ## Run the no-Docker end-to-end pipeline test
-	go test ./cmd -run TestInitPipelineNoRunE2E -v
+e2e: ## Run the no-Docker end-to-end pipeline tests
+	go test ./cmd -run 'TestInitPipelineNoRunE2E|TestUpdatePreservesHostPortsE2E' -v
+
+heal-proof: ## Live proof: LLM repairs a runtime failure and a build failure
+	bash scripts/live-heal-test.sh
 
 tidy: ## Tidy module dependencies
 	go mod tidy

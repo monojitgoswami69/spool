@@ -19,6 +19,17 @@
 - **Release engineering**: GitHub Actions CI, GoReleaser, `install.sh`,
   end-to-end no-Docker pipeline tests, race-tested suite.
 
+### Healer hardening (live-verified)
+- LLM plans that target generic `Dockerfile` are normalized to the failing
+  service's actual filename.
+- Validation failures are fed back to the model and retried instead of aborting
+  the heal loop.
+- Runtime crash loops (`restarting` with no exit code) fail fast after a grace
+  period instead of waiting the full health timeout.
+- Entry files (`main.py`, `app.py`, `server.js`, ...) are included in the LLM
+  repair context.
+- `make heal-proof` proves a live runtime repair and a live build repair.
+
 ### Fixes
 - Port allocator now detects Docker's `0.0.0.0` bindings (3000→3001 remap).
 - `spool down` no longer panics from a `-v` flag collision.

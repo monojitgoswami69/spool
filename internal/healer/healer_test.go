@@ -330,3 +330,102 @@ func TestTail(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestVerifyRuntimeFailsFastOnExitedContainer(t *testing.T) {
+	compose := &fakeCompose{ps: []domain.Container{{Service: "api", State: "exited", ExitCode: 1}}}
+	h := newHealerTest(t, "FROM python:3.11-slim\n", compose, nil)
+	h.HealthTimeout = 10 * time.Second // must not wait this long
+	h.PollInterval = 100 * time.Millisecond
+	start := time.Now()
+	if err := h.VerifyRuntime(context.Background()); err == nil {
+		t.Fatal("expected exited container to fail")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("exited container took %s to fail", elapsed)
+	}
+}
+
+func TestApplyPlanNormalizesGenericDockerfileName(t *testing.T) {
+	work := t.TempDir()
+	jail, err := safefs.NewJail(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jail.WriteFile("Dockerfile.api", []byte("FROM node:20-alpine\nRUN npm ci\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &Healer{WorkJail: jail, Provenance: NewProvenance(""), Services: []*domain.Service{{Name: "api"}}}
+	plan := &RepairPlan{Changes: []Change{{Operation: "replace_exact", File: "Dockerfile", Anchor: "RUN npm ci", Content: "RUN npm install"}}}
+	applied, _, err := h.applyPlan("Dockerfile.api", plan, Failure{})
+	if err != nil || !applied {
+		t.Fatalf("applied=%v err=%v", applied, err)
+	}
+	got, _ := jail.ReadFile("Dockerfile.api")
+	if !strings.Contains(string(got), "RUN npm install") {
+		t.Fatalf("patch not applied:\n%s", got)
+	}
+}
+
+type scriptedHealLLM struct {
+	responses []string
+	i         int
+	calls     int
+}
+
+func (s *scriptedHealLLM) Call(ctx context.Context, system, user string) (string, error) {
+	s.calls++
+	if s.i >= len(s.responses) {
+		return s.responses[len(s.responses)-1], nil
+	}
+	r := s.responses[s.i]
+	s.i++
+	return r, nil
+}
+func (s *scriptedHealLLM) Provider() string { return "scripted" }
+func (s *scriptedHealLLM) Model() string    { return "scripted" }
+
+func TestLLMRepairRetriesAfterValidationFeedback(t *testing.T) {
+	work := t.TempDir()
+	jail, err := safefs.NewJail(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jail.WriteFile("Dockerfile.api", []byte("FROM node:20-alpine\nRUN npm ci\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	llmClient := &scriptedHealLLM{responses: []string{
+		`{"changes":[{"operation":"replace_exact","file":"main.py","anchor":"x","content":"y"}]}`,
+		`{"changes":[{"operation":"replace_exact","file":"Dockerfile","anchor":"RUN npm ci","content":"RUN npm install"}],"summary":"fix install"}`,
+	}}
+	h := &Healer{
+		LLM: llmClient, WorkJail: jail, Provenance: NewProvenance(""),
+		Services: []*domain.Service{{Name: "api"}},
+	}
+	applied, summary, err := h.llmRepair(context.Background(), "api", "Dockerfile.api",
+		Failure{Category: CatDockerBuild, Error: "boom"}, "boom", false)
+	if err != nil || !applied {
+		t.Fatalf("applied=%v err=%v summary=%q", applied, err, summary)
+	}
+	if llmClient.calls != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", llmClient.calls)
+	}
+	got, _ := jail.ReadFile("Dockerfile.api")
+	if !strings.Contains(string(got), "RUN npm install") {
+		t.Fatalf("patch not applied:\n%s", got)
+	}
+}
+
+func TestVerifyRuntimeCrashLoopFailsFast(t *testing.T) {
+	compose := &fakeCompose{ps: []domain.Container{{Service: "api", State: "restarting", ExitCode: 0}}}
+	h := newHealerTest(t, "FROM python:3.11-slim\n", compose, nil)
+	h.HealthTimeout = 10 * time.Second
+	h.PollInterval = 20 * time.Millisecond
+	h.RestartGrace = 150 * time.Millisecond
+	start := time.Now()
+	if err := h.VerifyRuntime(context.Background()); err == nil {
+		t.Fatal("expected crash loop to fail")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("crash loop took %s to fail", elapsed)
+	}
+}
