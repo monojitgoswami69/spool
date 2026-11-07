@@ -23,8 +23,9 @@ type composeNetwork struct {
 }
 
 type composeBuild struct {
-	Context    string `yaml:"context"`
-	Dockerfile string `yaml:"dockerfile"`
+	Context    string            `yaml:"context"`
+	Dockerfile string            `yaml:"dockerfile"`
+	Args       map[string]string `yaml:"args,omitempty"`
 }
 
 type composeDependency struct {
@@ -114,10 +115,17 @@ func GenerateComposeFile(p *domain.Project, envFile string) (string, error) {
 	for _, app := range p.Services {
 		dockerfilePath := filepath.Join(p.WorkDir, "Dockerfile."+app.Name)
 		dockerfile := relFromWorkDir(p.SourcePath, dockerfilePath)
+		buildArgs := map[string]string{}
+		for _, ev := range p.Env {
+			if isPublicBuildKey(ev.Key) {
+				buildArgs[ev.Key] = "${" + ev.Key + "}"
+			}
+		}
 		svc := composeService{
 			Build: &composeBuild{
 				Context:    context,
 				Dockerfile: dockerfile,
+				Args:       buildArgs,
 			},
 			ContainerName: composeName(p.ID, app.Name),
 			Networks:      []string{network},

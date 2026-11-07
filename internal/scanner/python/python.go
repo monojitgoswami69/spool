@@ -223,51 +223,83 @@ func Detect(relPath, dir string, pyproj *PyProject, pm domain.PackageManager) *d
 	}
 
 	hasManage := fsutil.Exists(filepath.Join(dir, "manage.py"))
-	isWeb := hasManage || deps["django"] || deps["fastapi"] || deps["flask"] || deps["streamlit"] || deps["gradio"]
+	exposed := fsutil.DockerfileExpose(dir)
+	dockerCmd := fsutil.DockerfileCMD(dir)
+	flaskApp := findFlaskApp(dir)
+	entryOK := hasPyEntry(dir) || flaskApp != "" || exposed > 0 || strings.TrimSpace(dockerCmd) != ""
+	isWeb := hasManage || deps["django"] || deps["fastapi"] || deps["flask"] || deps["streamlit"] || deps["gradio"] || hasWebLib(deps)
 
 	// Web framework detection MUST precede worker heuristics so that a service
-	// named e.g. "task-api" is still detected as FastAPI.
+	// named e.g. "task-api" is still detected as FastAPI. A dependency alone is
+	// not enough: root-level tooling pyprojects and libraries must not become
+	// services, so we require a plausible entry point, EXPOSE, or Dockerfile CMD.
 	switch {
-	case hasManage || deps["django"]:
+	case hasManage || (deps["django"] && entryOK):
 		svc.Framework = domain.FrameworkDjango
 		svc.DefaultPort = 8000
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), "python manage.py runserver 0.0.0.0:8000")
-	case deps["fastapi"]:
+		svc.StartCmd = firstNonEmpty(dockerCmd, "python manage.py runserver 0.0.0.0:8000")
+	case deps["fastapi"] && (findFastAPIEntry(dir) != "" || entryOK):
 		svc.Framework = domain.FrameworkFastAPI
 		svc.DefaultPort = 8000
 		entry := findFastAPIEntry(dir)
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), fmt.Sprintf("uvicorn %s --host 0.0.0.0 --port 8000", entry))
-	case deps["flask"]:
+		if entry == "" {
+			entry = findASGIEntry(dir)
+		}
+		svc.StartCmd = firstNonEmpty(dockerCmd, fmt.Sprintf("uvicorn %s --host 0.0.0.0 --port 8000", entry))
+	case deps["flask"] && entryOK:
 		svc.Framework = domain.FrameworkFlask
 		svc.DefaultPort = 5000
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), "flask run --host=0.0.0.0 --port=5000")
-	case deps["streamlit"]:
+		appFlag := ""
+		switch {
+		case flaskApp != "":
+			appFlag = " --app " + flaskApp
+		case fsutil.Exists(filepath.Join(dir, "wsgi.py")):
+			appFlag = " --app wsgi"
+		case fsutil.Exists(filepath.Join(dir, "app.py")):
+			appFlag = " --app app"
+		}
+		svc.StartCmd = firstNonEmpty(dockerCmd, "flask"+appFlag+" run --host=0.0.0.0 --port=5000")
+	case deps["streamlit"] && entryOK:
 		svc.Framework = domain.FrameworkStreamlit
 		svc.DefaultPort = 8501
 		entry := firstPyEntry(dir, "app.py", "main.py")
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), fmt.Sprintf("streamlit run %s --server.port 8501 --server.address 0.0.0.0", entry))
-	case deps["gradio"]:
+		svc.StartCmd = firstNonEmpty(dockerCmd, fmt.Sprintf("streamlit run %s --server.port 8501 --server.address 0.0.0.0", entry))
+	case deps["gradio"] && entryOK:
 		svc.Framework = domain.FrameworkGradio
 		svc.DefaultPort = 7860
 		entry := firstPyEntry(dir, "app.py", "main.py")
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), "python "+entry)
-	case deps["celery"] && !isWeb:
+		svc.StartCmd = firstNonEmpty(dockerCmd, "python "+entry)
+	case deps["celery"] && !isWeb && hasCeleryEntry(dir):
 		svc.Framework = domain.FrameworkCelery
 		svc.IsWorker = true
 		svc.DefaultPort = 0
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), "celery -A app worker --loglevel=info")
-	case !isWeb && isWorkerName(name, relPath):
+		svc.StartCmd = firstNonEmpty(dockerCmd, "celery -A app worker --loglevel=info")
+	case !isWeb && isWorkerName(name, relPath) && entryOK:
 		svc.Framework = domain.FrameworkGeneric
 		svc.IsWorker = true
 		svc.DefaultPort = 0
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), "python "+firstPyEntry(dir, "main.py", "app.py", "worker.py", "run.py"))
+		svc.StartCmd = firstNonEmpty(dockerCmd, "python "+firstPyEntry(dir, "main.py", "app.py", "worker.py", "run.py"))
 	default:
+		if !entryOK {
+			return nil
+		}
 		svc.Framework = domain.FrameworkGeneric
-		svc.DefaultPort = 8000
-		svc.StartCmd = firstNonEmpty(fsutil.DockerfileCMD(dir), "python "+firstPyEntry(dir, "main.py", "app.py", "server.py", "run.py"))
+		if deps["uvicorn"] || deps["gunicorn"] || deps["hypercorn"] || deps["starlette"] {
+			svc.DefaultPort = 8000
+			svc.StartCmd = firstNonEmpty(dockerCmd, "uvicorn "+findASGIEntry(dir)+" --host 0.0.0.0 --port 8000")
+		} else if hasWebLib(deps) || exposed > 0 {
+			svc.DefaultPort = 8000
+			svc.StartCmd = firstNonEmpty(dockerCmd, "python "+firstPyEntry(dir, "main.py", "app.py", "server.py", "run.py"))
+		} else {
+			// A plain Python script is not a web service; run it as a worker so
+			// we never attach a doomed HTTP healthcheck.
+			svc.IsWorker = true
+			svc.DefaultPort = 0
+			svc.StartCmd = firstNonEmpty(dockerCmd, "python "+firstPyEntry(dir, "main.py", "app.py", "server.py", "run.py"))
+		}
 	}
 
-	if exposed := fsutil.DockerfileExpose(dir); exposed > 0 && !svc.IsWorker {
+	if exposed > 0 && !svc.IsWorker {
 		svc.DefaultPort = exposed
 	}
 	svc.Port = svc.DefaultPort
@@ -278,6 +310,131 @@ func Detect(relPath, dir string, pyproj *PyProject, pm domain.PackageManager) *d
 		svc.HostPort = svc.DefaultPort
 	}
 	return svc
+}
+
+var flaskSkipDirs = map[string]bool{
+	"venv": true, ".venv": true, "__pycache__": true, ".git": true, "node_modules": true,
+	"tests": true, "test": true, "examples": true, "example": true, "docs": true,
+	"migrations": true, "alembic": true, "build": true, "dist": true,
+}
+
+// findFlaskApp returns the importable module that defines a Flask app (e.g.
+// "project.app"), supporting the common root-requirements + package layout.
+func findFlaskApp(dir string) string {
+	candidates := []struct{ file, module string }{
+		{"app.py", "app"},
+		{"wsgi.py", "wsgi"},
+		{"application.py", "application"},
+		{"main.py", "main"},
+		{"src/app.py", "src.app"},
+		{"src/main.py", "src.main"},
+		{"app/app.py", "app.app"},
+		{"app/main.py", "app.main"},
+	}
+	for _, c := range candidates {
+		p := filepath.Join(dir, filepath.FromSlash(c.file))
+		if data, err := os.ReadFile(p); err == nil && flaskRe.Match(data) {
+			return c.module
+		}
+	}
+	var found string
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found != "" {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		parts := strings.Split(rel, "/")
+		if d.IsDir() {
+			if flaskSkipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			if len(parts) >= 2 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if len(parts) > 2 || !strings.HasSuffix(path, ".py") {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil || !flaskRe.Match(data) {
+			return nil
+		}
+		module := strings.TrimSuffix(rel, ".py")
+		module = strings.ReplaceAll(module, "/", ".")
+		found = module
+		return filepath.SkipAll
+	})
+	return found
+}
+
+func hasPyEntry(dir string) bool {
+	for _, c := range []string{
+		"main.py", "app.py", "server.py", "run.py", "asgi.py", "wsgi.py", "manage.py",
+		"app/main.py", "src/main.py", "src/app.py", "src/server.py", "cmd/main.py",
+	} {
+		if fsutil.Exists(filepath.Join(dir, filepath.FromSlash(c))) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCeleryEntry(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "venv", ".venv", "__pycache__", ".git", "node_modules":
+				if path != dir {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".py") {
+			if data, err := os.ReadFile(path); err == nil && strings.Contains(string(data), "Celery(") {
+				found = true
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+func hasWebLib(deps map[string]bool) bool {
+	for _, d := range []string{
+		"aiohttp", "tornado", "bottle", "sanic", "quart", "falcon", "pyramid",
+		"uvicorn", "gunicorn", "hypercorn", "starlette", "werkzeug",
+	} {
+		if deps[d] {
+			return true
+		}
+	}
+	return false
+}
+
+func findASGIEntry(dir string) string {
+	if fsutil.Exists(filepath.Join(dir, "main.py")) {
+		return "main:app"
+	}
+	if fsutil.Exists(filepath.Join(dir, "app", "main.py")) {
+		return "app.main:app"
+	}
+	if fsutil.Exists(filepath.Join(dir, "src", "main.py")) {
+		return "src.main:app"
+	}
+	return "main:app"
 }
 
 func findFastAPIEntry(dir string) string {
@@ -296,30 +453,31 @@ func findFastAPIEntry(dir string) string {
 			return c.entry
 		}
 	}
-	// Fall back to any .py file containing FastAPI(.
+	// Fall back to any non-test .py file containing FastAPI(.
 	var found string
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || found != "" || d.IsDir() {
-			if d != nil && d.IsDir() && (d.Name() == "venv" || d.Name() == ".venv" || d.Name() == "__pycache__") {
+		if err != nil || found != "" {
+			return nil
+		}
+		if d.IsDir() {
+			if flaskSkipDirs[d.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if strings.HasSuffix(path, ".py") {
-			if data, err := os.ReadFile(path); err == nil && fastAPIRe.Match(data) {
-				rel, _ := filepath.Rel(dir, path)
-				mod := strings.TrimSuffix(filepath.ToSlash(rel), ".py")
-				mod = strings.ReplaceAll(mod, "/", ".")
-				found = mod + ":app"
-				return fmt.Errorf("stop")
-			}
+		if !strings.HasSuffix(path, ".py") || strings.HasSuffix(path, "_test.py") || strings.HasPrefix(filepath.Base(path), "test_") {
+			return nil
+		}
+		if data, err := os.ReadFile(path); err == nil && fastAPIRe.Match(data) {
+			rel, _ := filepath.Rel(dir, path)
+			mod := strings.TrimSuffix(filepath.ToSlash(rel), ".py")
+			mod = strings.ReplaceAll(mod, "/", ".")
+			found = mod + ":app"
+			return filepath.SkipAll
 		}
 		return nil
 	})
-	if found != "" {
-		return found
-	}
-	return "main:app"
+	return found
 }
 
 func firstPyEntry(dir string, names ...string) string {

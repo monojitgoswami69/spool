@@ -86,7 +86,7 @@ func TestResolveFromDotEnv(t *testing.T) {
 func TestResolveFromConfigFile(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("SPOOL_HOME", t.TempDir())
-	cfg := &Config{LLMProvider: "gemini", LLMModel: "gemini-2.5-flash", LLMAPIKey: "cfg-key"}
+	cfg := &Config{LLMProvider: "gemini", LLMModel: "gemini-3.5-flash-lite", LLMAPIKey: "cfg-key"}
 	if err := Save(cfg); err != nil {
 		t.Fatal(err)
 	}

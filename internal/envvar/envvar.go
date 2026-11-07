@@ -188,6 +188,9 @@ func DiscoverEnvVars(repoRoot string) []*domain.EnvVar {
 }
 
 func ignoredKey(key string) bool {
+	if strings.HasSuffix(key, "_") {
+		return true
+	}
 	switch strings.ToLower(key) {
 	case "node_env", "path", "home", "pwd", "user", "lang", "term":
 		return true

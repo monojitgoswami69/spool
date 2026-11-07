@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/monojitgoswami69/spool/internal/domain"
+	"github.com/monojitgoswami69/spool/internal/scanner/fsutil"
 	"github.com/monojitgoswami69/spool/internal/scanner/golang"
 	"github.com/monojitgoswami69/spool/internal/scanner/node"
 	"github.com/monojitgoswami69/spool/internal/scanner/python"
@@ -35,6 +36,10 @@ var ignoredDirs = map[string]bool{
 	"target": true, "bin": true, "obj": true, ".idea": true, ".vscode": true,
 	"db-scripts": true, "demo-data": true, "contracts": true, "hooks": true,
 	"types": true, "components": true, "migrations": true, ".spool": true,
+	"examples": true, "example": true, "samples": true, "sample": true,
+	"demo": true, "demos": true, "tutorials": true, "tutorial": true,
+	"benchmarks": true, "benchmark": true, "playground": true,
+	"fixtures": true, "fixture": true, "e2e": true,
 }
 
 // ScanRepository returns all detected services, or an error when none are found.
@@ -71,28 +76,30 @@ func Scan(root string) (*Result, error) {
 		services = append(services, s)
 	}
 
-	// Root manifests.
-	if pkg, err := node.ParsePackageJSON(abs); err == nil {
-		for _, rel := range node.DiscoverWorkspacePackages(abs, pkg) {
+	// Root manifests. Workspace discovery also works from pnpm-workspace.yaml
+	// alone (some monorepos omit a root package.json).
+	rootPkg, rootPkgErr := node.ParsePackageJSON(abs)
+	if rootPkgErr == nil || fsutil.Exists(filepath.Join(abs, "pnpm-workspace.yaml")) {
+		for _, rel := range node.DiscoverWorkspacePackages(abs, rootPkg) {
 			sub := filepath.Join(abs, filepath.FromSlash(rel))
 			subPkg, err := node.ParsePackageJSON(sub)
 			if err != nil || !node.IsRunnableService(subPkg) {
 				continue
 			}
 			pm, ver := node.DetectPackageManager(sub, subPkg)
-			if pm == domain.PMNpm && !node.HasLockfile(sub) {
-				pm, ver = node.DetectPackageManager(abs, pkg)
+			if pm == domain.PMNpm && !node.HasLockfile(sub) && rootPkg != nil {
+				pm, ver = node.DetectPackageManager(abs, rootPkg)
 			}
 			svc := node.Detect(rel, sub, subPkg, pm)
 			svc.PackageManagerVersion = ver
 			add(svc)
 		}
-		if node.IsRunnableService(pkg) {
-			pm, ver := node.DetectPackageManager(abs, pkg)
-			svc := node.Detect(".", abs, pkg, pm)
-			svc.PackageManagerVersion = ver
-			add(svc)
-		}
+	}
+	if rootPkgErr == nil && node.IsRunnableService(rootPkg) {
+		pm, ver := node.DetectPackageManager(abs, rootPkg)
+		svc := node.Detect(".", abs, rootPkg, pm)
+		svc.PackageManagerVersion = ver
+		add(svc)
 	}
 	if python.IsPythonDir(abs) {
 		pyproj, _ := python.ParsePyProject(abs)
@@ -162,6 +169,11 @@ func Scan(root string) (*Result, error) {
 	}
 
 	if len(services) == 0 {
+		if s := detectStatic(abs); s != nil {
+			add(s)
+		}
+	}
+	if len(services) == 0 {
 		return nil, domain.E(domain.KindNotFound, "scanner.Scan",
 			fmt.Sprintf("no supported services detected in %s (looked for package.json, pyproject.toml, go.mod, Cargo.toml)", abs), nil)
 	}
@@ -210,4 +222,41 @@ func normalizeNames(services []*domain.Service) {
 // service keys rely on (they are derived from Name, but paths help humans).
 func ensureUniquePaths(services []*domain.Service) {
 	_ = services // paths may legitimately repeat across languages; names are unique
+}
+
+// detectStatic recognizes a plain static site served from the repository root.
+func detectStatic(root string) *domain.Service {
+	if !fsutil.Exists(filepath.Join(root, "index.html")) {
+		return nil
+	}
+	base := filepath.Base(root)
+	if len(base) >= 9 && base[len(base)-9] == '-' && isHex8(base[len(base)-8:]) {
+		base = base[:len(base)-9]
+	}
+	name := fsutil.SanitizeName(base)
+	if name == "" {
+		name = "site"
+	}
+	return &domain.Service{
+		Name:        name,
+		Path:        ".",
+		Language:    domain.LangStatic,
+		Framework:   domain.FrameworkStatic,
+		DefaultPort: 80,
+		Port:        80,
+		HostPort:    80,
+		StartCmd:    "",
+	}
+}
+
+func isHex8(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
 }

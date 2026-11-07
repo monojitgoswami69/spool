@@ -16,7 +16,7 @@ import (
 
 const (
 	// DefaultHost is the loopback interface probed by default.
-	DefaultHost = "127.0.0.1"
+	DefaultHost = "0.0.0.0"
 	// MinPort is the lowest unprivileged port Spool will publish.
 	MinPort = 1024
 	// MaxPort is the highest valid TCP port.

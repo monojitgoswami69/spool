@@ -141,3 +141,23 @@ func TestApplyHostPorts(t *testing.T) {
 		t.Fatal("expected host port allocation")
 	}
 }
+
+func TestPsycopgV3InfersPostgres(t *testing.T) {
+	infras, err := Infer(nil, map[string]bool{"psycopg": true}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infras) != 1 || infras[0].Type != domain.InfraPostgres {
+		t.Fatalf("unexpected %+v", infras)
+	}
+	b := GenerateEnvBindings(infras)
+	if b["POSTGRES_SERVER"] != "postgres" {
+		t.Errorf("POSTGRES_SERVER = %q", b["POSTGRES_SERVER"])
+	}
+	if b["SQLALCHEMY_DATABASE_URI"] == "" {
+		t.Error("missing SQLALCHEMY_DATABASE_URI")
+	}
+	if b["PGHOST"] != "postgres" {
+		t.Errorf("PGHOST = %q", b["PGHOST"])
+	}
+}

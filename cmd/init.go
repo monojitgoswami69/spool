@@ -100,7 +100,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	project.Env = envvar.DiscoverEnvVars(sourcePath)
-	logf("%s", ui.SuccessLine(fmt.Sprintf("%d variable(s)", len(project.Env))))
+	sourceEnv := loadSourceEnv(sourcePath, services)
+	project.Env = mergeDiscoveredEnv(project.Env, sourceEnv)
+	logf("%s", ui.SuccessLine(fmt.Sprintf("%d variable(s) (%d from repo .env)", len(project.Env), len(sourceEnv))))
 
 	// 4. Infer infra FIRST so its host ports are reserved before app ports.
 	logf("%s", ui.Step(4, 8, "Inferring infrastructure"))
@@ -132,6 +134,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// 6. Write .env and lock.
 	logf("%s", ui.Step(6, 8, "Writing environment and state"))
+	if len(sourceEnv) > 0 {
+		existing, _ := mgr.LoadEnv()
+		for k, v := range sourceEnv {
+			existing[k] = v
+		}
+		if err := mgr.SaveEnv(existing); err != nil {
+			return err
+		}
+	}
 	if err := writeProjectEnv(mgr, lock); err != nil {
 		return err
 	}
@@ -271,4 +282,57 @@ func portMap(services []*domain.Service) map[string]int {
 		}
 	}
 	return out
+}
+
+// loadSourceEnv reads the repository's own .env files (including the user's
+// real .env) so generated stacks inherit required configuration. Values from
+// more specific files win, and only non-empty values are imported.
+func loadSourceEnv(root string, services []*domain.Service) map[string]string {
+	out := map[string]string{}
+	names := []string{".env.example", ".env.sample", ".env.template", ".env", ".env.local", ".env.development.local", ".env.production.local"}
+	dirs := []string{root}
+	for _, svc := range services {
+		if svc.Path != "" && svc.Path != "." {
+			dirs = append(dirs, filepath.Join(root, filepath.FromSlash(svc.Path)))
+		}
+	}
+	for _, dir := range dirs {
+		for _, name := range names {
+			m, err := envvar.ParseEnvFile(filepath.Join(dir, name))
+			if err != nil {
+				continue
+			}
+			for k, v := range m {
+				if strings.TrimSpace(v) != "" {
+					out[k] = v
+				}
+			}
+		}
+	}
+	return out
+}
+
+// mergeDiscoveredEnv adds repo .env values as user-sourced variables.
+func mergeDiscoveredEnv(discovered []*domain.EnvVar, source map[string]string) []*domain.EnvVar {
+	seen := map[string]bool{}
+	for _, ev := range discovered {
+		seen[ev.Key] = true
+		if v, ok := source[ev.Key]; ok && strings.TrimSpace(v) != "" {
+			ev.Value = v
+			ev.Default = v
+			ev.Required = false
+		}
+	}
+	keys := make([]string, 0, len(source))
+	for k := range source {
+		if !seen[k] {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		discovered = append(discovered, &domain.EnvVar{Key: k, Value: source[k], Default: source[k], Source: domain.EnvSourceUser})
+	}
+	sort.Slice(discovered, func(i, j int) bool { return discovered[i].Key < discovered[j].Key })
+	return discovered
 }

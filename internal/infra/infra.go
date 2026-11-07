@@ -109,6 +109,13 @@ func GenerateEnvBindings(infras []*domain.InfraService) map[string]string {
 			out["POSTGRES_USER"] = "app"
 			out["POSTGRES_PASSWORD"] = "app"
 			out["POSTGRES_DB"] = "app_db"
+			out["POSTGRES_SERVER"] = host
+			out["PGHOST"] = host
+			out["PGPORT"] = itoa(p)
+			out["PGUSER"] = "app"
+			out["PGPASSWORD"] = "app"
+			out["PGDATABASE"] = "app_db"
+			out["SQLALCHEMY_DATABASE_URI"] = url
 		case domain.InfraMySQL:
 			url := fmt.Sprintf("mysql://app:app@%s:%d/app_db", host, p)
 			out["MYSQL_URL"] = url
@@ -242,7 +249,8 @@ func (s signals) wants(kind domain.InfraType) bool {
 	switch kind {
 	case domain.InfraPostgres:
 		_, _, keyOK := s.keyHas("POSTGRES", "PGDATABASE")
-		return s.hasDep("pg", "postgres", "postgresql", "psycopg2", "psycopg2-binary", "asyncpg",
+		return s.hasDep("pg", "postgres", "postgresql", "psycopg", "psycopg2", "psycopg2-binary",
+			"psycopg-binary", "psycopg-pool", "asyncpg",
 			"github.com/jackc/pgx/v5", "gorm.io/driver/postgres") ||
 			keyOK || s.valueStarts("postgres://", "postgresql://", "postgresql+")
 	case domain.InfraMySQL:

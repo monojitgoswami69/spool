@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -234,6 +235,17 @@ func Detect(relPath, dir string, pkg *PackageJSON, pm domain.PackageManager) *do
 		}
 	}
 
+	// For plain Node HTTP servers, honour a port hardcoded in source so health
+	// probes target the right container port.
+	if !isWorker && fsutil.DockerfileExpose(dir) == 0 {
+		switch svc.Framework {
+		case domain.FrameworkExpress, domain.FrameworkFastify, domain.FrameworkKoa, domain.FrameworkGeneric:
+			if p := detectSourcePort(dir); p > 0 {
+				svc.DefaultPort = p
+			}
+		}
+	}
+
 	if isWorker {
 		svc.IsWorker = true
 		svc.DefaultPort = 0
@@ -253,6 +265,64 @@ func Detect(relPath, dir string, pkg *PackageJSON, pm domain.PackageManager) *do
 	}
 
 	return svc
+}
+
+var nodePortPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)process\.env\.PORT\s*\|\|\s*(\d{2,5})`),
+	regexp.MustCompile(`(?i)\.listen\(\s*(\d{2,5})`),
+	regexp.MustCompile(`(?i)listen\(\s*(\d{2,5})`),
+	regexp.MustCompile(`(?i)(?:localhost|127\.0\.0\.1):(\d{2,5})`),
+}
+
+func detectSourcePort(dir string) int {
+	best := 0
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", ".git", "dist", "build", ".next", ".nuxt", ".svelte-kit", "coverage":
+				if path != dir {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs":
+		default:
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		text := string(data)
+		for _, re := range nodePortPatterns {
+			if m := re.FindStringSubmatch(text); m != nil {
+				if n := atoiPort(m[1]); n > 0 && best == 0 {
+					best = n
+				}
+			}
+		}
+		return nil
+	})
+	return best
+}
+
+func atoiPort(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	if n < 1024 || n > 65535 {
+		return 0
+	}
+	return n
 }
 
 func detectFramework(pkg *PackageJSON) domain.Framework {
@@ -341,6 +411,7 @@ func IsRunnableService(pkg *PackageJSON) bool {
 	for _, dep := range []string{
 		"next", "nuxt", "nuxt3", "@remix-run/node", "@sveltejs/kit", "@nestjs/core",
 		"vite", "astro", "react-scripts", "express", "fastify", "koa",
+		"@hapi/hapi", "hapi", "restify", "polka", "sails", "loopback",
 	} {
 		if pkg.HasDependency(dep) {
 			return true

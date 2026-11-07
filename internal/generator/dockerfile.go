@@ -23,6 +23,8 @@ func GenerateDockerfile(svc *domain.Service, opts Options) string {
 		return generateGo(svc, opts)
 	case domain.LangRust:
 		return generateRust(svc, opts)
+	case domain.LangStatic:
+		return generateStatic(svc)
 	default:
 		return generateGeneric(svc, opts)
 	}
@@ -54,6 +56,10 @@ func generateNode(svc *domain.Service, opts Options) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	w("FROM %s AS base", image)
 	w("WORKDIR /app")
+	for _, k := range sortedKeysOf(opts.BuildEnv) {
+		w("ARG %s", k)
+		w("ENV %s=$%s", k, k)
+	}
 	w("RUN apk add --no-cache libc6-compat curl python3 make g++")
 	for _, line := range corepack {
 		w("RUN %s", line)
@@ -110,6 +116,10 @@ func generateNodeSPA(svc *domain.Service, opts Options) string {
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	w("FROM %s AS builder", image)
 	w("WORKDIR /app")
+	for _, k := range sortedKeysOf(opts.BuildEnv) {
+		w("ARG %s", k)
+		w("ENV %s=$%s", k, k)
+	}
 	w("RUN apk add --no-cache libc6-compat curl")
 	for _, line := range corepack {
 		w("RUN %s", line)
@@ -406,4 +416,20 @@ func shellJoin(args []string) string {
 		quoted = append(quoted, "'"+strings.ReplaceAll(a, "'", `'"'"'`)+"'")
 	}
 	return strings.Join(quoted, " ")
+}
+
+func generateStatic(svc *domain.Service) string {
+	port := fmtPort(svc.Port)
+	if port == 0 {
+		port = 80
+	}
+	var b strings.Builder
+	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	w("FROM nginx:alpine AS runner")
+	w("RUN apk add --no-cache curl")
+	w("COPY . /usr/share/nginx/html")
+	w("RUN printf 'server {\\n listen %d;\\n root /usr/share/nginx/html;\\n index index.html;\\n location / { try_files $uri $uri/ /index.html; }\\n}' > /etc/nginx/conf.d/default.conf", port)
+	w("EXPOSE %d", port)
+	w("CMD [\"nginx\", \"-g\", \"daemon off;\"]")
+	return b.String()
 }

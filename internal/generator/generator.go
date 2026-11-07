@@ -6,6 +6,7 @@ package generator
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/monojitgoswami69/spool/internal/domain"
@@ -24,6 +25,9 @@ type Options struct {
 	RepoRoot string
 	WorkDir  string
 	Monorepo bool
+	// BuildEnv holds public build-time variables (NEXT_PUBLIC_*, VITE_*,
+	// REACT_APP_*) that must be present while the frontend is compiled.
+	BuildEnv map[string]string
 }
 
 // Generate produces all manifests in memory.
@@ -47,6 +51,9 @@ func GenerateWithOptions(p *domain.Project, opts Options) (*Output, error) {
 		opts.WorkDir = p.WorkDir
 	}
 	files := make(map[string]string)
+	if opts.BuildEnv == nil {
+		opts.BuildEnv = publicBuildEnv(p)
+	}
 
 	for _, svc := range p.Services {
 		name := "Dockerfile." + svc.Name
@@ -176,4 +183,34 @@ func fmtPort(p int) int {
 		return 80
 	}
 	return p
+}
+
+// publicBuildEnv selects frontend variables that are safe and necessary at
+// image build time.
+func publicBuildEnv(p *domain.Project) map[string]string {
+	out := map[string]string{}
+	for _, ev := range p.Env {
+		if !isPublicBuildKey(ev.Key) {
+			continue
+		}
+		val := ev.Value
+		if val == "" {
+			val = ev.Default
+		}
+		out[ev.Key] = val
+	}
+	return out
+}
+
+func isPublicBuildKey(k string) bool {
+	return strings.HasPrefix(k, "NEXT_PUBLIC_") || strings.HasPrefix(k, "VITE_") || strings.HasPrefix(k, "REACT_APP_")
+}
+
+func sortedKeysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

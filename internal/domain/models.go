@@ -16,6 +16,7 @@ const (
 	LangPython Language = "python"
 	LangGo     Language = "go"
 	LangRust   Language = "rust"
+	LangStatic Language = "static"
 )
 
 // Framework identifies the web/app framework of a service.
@@ -44,6 +45,7 @@ const (
 	FrameworkGo      Framework = "go"
 	FrameworkRust    Framework = "rust"
 	FrameworkGeneric Framework = "generic"
+	FrameworkStatic  Framework = "static"
 )
 
 // PackageManager identifies the dependency manager in use.

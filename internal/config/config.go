@@ -234,7 +234,7 @@ func providerEnvKey(provider string) string {
 func DefaultModel(provider string) string {
 	switch NormalizeProvider(provider) {
 	case "gemini":
-		return "gemini-2.5-flash"
+		return "gemini-3.5-flash-lite"
 	case "openai":
 		return "gpt-4o-mini"
 	case "anthropic":

@@ -115,7 +115,7 @@ func TestGeminiCall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := New(Config{Provider: "gemini", Model: "gemini-2.5-flash", APIKey: "key", BaseURL: srv.URL, JSONMode: true})
+	c, _ := New(Config{Provider: "gemini", Model: "gemini-3.5-flash-lite", APIKey: "key", BaseURL: srv.URL, JSONMode: true})
 	resp, err := c.CallTools(context.Background(), "s", "u", nil)
 	if err != nil {
 		t.Fatal(err)

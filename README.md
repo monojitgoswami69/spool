@@ -101,7 +101,7 @@ tunnel tooling.
 | `spool init [path-or-url]` | Full pipeline: clone → scan → infer → generate → build → heal → verify |
 | `spool chat [project]` | Interactive agent REPL with streaming tool pills |
 | `spool up [project]` | Start a stack and wait for real health |
-| `spool down [project]` | Stop a stack (`-v` removes volumes) |
+| `spool down [project]` | Stop a stack (`--volumes` removes volumes) |
 | `spool nuke <project>` | Destroy containers, volumes, clone, and state (aliases: `incinerate`, `remove`) |
 | `spool heal [project]` | Deterministic + LLM closed-loop repair (`--tries`) |
 | `spool explain [project]` | Dependency DAG, port map, repair provenance, required config |
@@ -109,6 +109,7 @@ tunnel tooling.
 | `spool tunnel [project]` | Ephemeral public preview URL (`--port`) |
 | `spool status [project]` | Parsed container/health/port table |
 | `spool logs [project] [service]` | Tail or stream logs (`-f`, `-n`) |
+| `spool env [project] [set KEY=VALUE \| unset KEY]` | List/required vars or edit overrides (auto-applies) |
 | `spool doctor` | Environment preflight |
 
 Global flags: `--verbose/-v`, `--quiet/-q`, `--no-color`, `--yes`.

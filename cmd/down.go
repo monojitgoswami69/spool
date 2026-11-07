@@ -18,7 +18,7 @@ var downCmd = &cobra.Command{
 }
 
 func init() {
-	downCmd.Flags().BoolVarP(&downVolumes, "volumes", "v", false, "also remove named volumes")
+	downCmd.Flags().BoolVar(&downVolumes, "volumes", false, "also remove named volumes")
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
