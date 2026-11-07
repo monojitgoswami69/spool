@@ -129,7 +129,7 @@ tunnel tooling.
 | `spool logs [project] [service]` | Tail or stream logs (`-f`, `-n`) |
 | `spool env [project] [set KEY=VALUE \| unset KEY]` | List/required vars or edit overrides (auto-applies) |
 | `spool setup` | Interactive provider/model/key/GitHub wizard with live verification |
-| `spool config [show\|path\|set <key> <value>]` | Inspect or edit global configuration |
+| `spool config [show\|path\|edit\|set <key> <value>]` | Interactive config panel (or show/set for scripts) |
 | `spool doctor` | Environment preflight (non-zero exit on critical failures) |
 | `spool completion [bash\|zsh\|fish]` | Shell completion scripts |
 

@@ -11,8 +11,8 @@ import (
 )
 
 var configCmd = &cobra.Command{
-	Use:   "config [show|path|set <key> <value>]",
-	Short: "Show or edit Spool's global configuration",
+	Use:   "config [show|path|edit|set <key> <value>]",
+	Short: "Open the interactive config panel, or show/set configuration",
 	Args:  cobra.ArbitraryArgs,
 	RunE:  runConfig,
 }
@@ -22,10 +22,13 @@ func init() {
 }
 
 func runConfig(cmd *cobra.Command, args []string) error {
-	action := "show"
-	if len(args) > 0 {
-		action = args[0]
+	if len(args) == 0 {
+		if isInteractive() {
+			return runConfigPanel()
+		}
+		return showConfig()
 	}
+	action := args[0]
 	switch action {
 	case "show":
 		return showConfig()
@@ -36,13 +39,18 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Println(p)
 		return nil
+	case "edit":
+		return runConfigPanel()
 	case "set":
 		if len(args) < 3 {
+			if isInteractive() {
+				return runConfigPanel()
+			}
 			return fmt.Errorf("usage: spool config set <provider|model|api-key|base-url|github-pat> <value>")
 		}
 		return setConfig(args[1], strings.Join(args[2:], " "))
 	default:
-		return fmt.Errorf("unknown config action %q (expected show, path, or set)", action)
+		return fmt.Errorf("unknown config action %q (expected show, path, edit, or set)", action)
 	}
 }
 
@@ -73,9 +81,18 @@ func showConfig() error {
 	repos, _ := config.ReposDir()
 	projects, _ := config.ProjectsDir()
 
+	configuredProvider, configuredModel := cfg.LLMProvider, cfg.LLMModel
+	if configuredProvider == "" {
+		configuredProvider = "(not set)"
+	}
+	if configuredModel == "" {
+		configuredModel = "(not set)"
+	}
 	rows := [][]string{
-		{"provider", provider},
-		{"model", model},
+		{"provider (resolved)", provider},
+		{"model (resolved)", model},
+		{"provider (config)", configuredProvider},
+		{"model (config)", configuredModel},
 		{"api key", keyState},
 		{"base url", base},
 		{"resolved from", source},
@@ -117,6 +134,22 @@ func setConfig(key, value string) error {
 		display = "••••••••"
 	}
 	logf("%s", ui.SuccessLine("set "+key+"="+display))
+	if r, rerr := config.Resolve(); rerr == nil {
+		switch strings.ToLower(key) {
+		case "provider":
+			if config.NormalizeProvider(r.Provider) != config.NormalizeProvider(value) {
+				logf("%s", ui.WarningLine("an env/.env value is overriding provider (resolved: "+r.Provider+")"))
+			}
+		case "model":
+			if r.Model != value {
+				logf("%s", ui.WarningLine("an env/.env value is overriding model (resolved: "+r.Model+")"))
+			}
+		case "api-key", "api_key", "apikey":
+			if r.APIKey != value {
+				logf("%s", ui.WarningLine("an env/.env key is overriding the configured API key"))
+			}
+		}
+	}
 	logf("%s", ui.MutedStyle.Render("verify with: spool doctor"))
 	return nil
 }

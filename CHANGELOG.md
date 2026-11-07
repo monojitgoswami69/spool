@@ -15,6 +15,12 @@
   regenerates managed Dockerfiles and retries automatically.
 - Agent system prompt now explicitly prefers inspecting/reusing repo assets.
 
+### Interactive config
+- `spool config` and `spool config set` (no args) open a proper terminal
+  config panel: provider cycling, editable model/base URL, masked API key and
+  GitHub PAT with reveal, and save. `config set KEY VALUE` still works for
+  scripts.
+
 ### Bulletproofing
 - Strict compose validation, rollback of failed patches, source-error detection,
   real BuildKit error extraction, and fast crash-loop failure.
