@@ -3,6 +3,9 @@
 ## v0.3.0
 
 ### Agent-first
+- Agent-native onboarding: `onboard_repository` tool + `onboard` intent. From a
+  clean slate, the agent clones/scans/generates/runs/heals/verifies a repo and
+  returns live URLs. Chat auto-switches context to the new project.
 - New `diagnose` intent + `diagnose_failure` tool: explains what failed, why,
   with evidence, container state, and next steps.
 - Persisted `last-failure.log` so diagnosis works after failed builds.

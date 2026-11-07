@@ -60,6 +60,7 @@ spool ask "show environment for portfolio-website"
 spool ask "check the health"
 spool ask "set GEMINI_MODEL=gemini-3.5-flash-lite on portfolio-website"
 spool ask "why did it fail?"          # diagnosis with evidence + next steps
+spool ask --yes "onboard https://github.com/vercel/nextjs-portfolio-starter"
 spool --yes ask "restart portfolio-website"
 ```
 

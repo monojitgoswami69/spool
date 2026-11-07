@@ -105,6 +105,8 @@ func TestParseIntentTable(t *testing.T) {
 		{"check the health", IntentHealth, "demo", "", "", "", 0, 0.9, false},
 		{"restart the web service", IntentRestart, "demo", "web", "", "", 0, 0.9, false},
 		{"why did the build fail", IntentDiagnose, "demo", "", "", "", 0, 0.92, false},
+		{"onboard https://github.com/acme/app", IntentOnboard, "demo", "", "", "", 0, 0.92, false},
+		{"set up repo /tmp/app --no-run", IntentOnboard, "demo", "", "", "", 0, 0.92, false},
 		{"take it down", IntentDown, "demo", "", "", "", 0, 0.9, false},
 		{"show me the logs", IntentLogs, "demo", "", "", "", 0, 0.9, false},
 		{"tell me a joke", IntentChat, "demo", "", "", "", 0, 0.0, false},
@@ -325,5 +327,75 @@ func TestRunIntentDiagnoseUsesPersistedFailure(t *testing.T) {
 		if !strings.Contains(res.Final, want) {
 			t.Errorf("diagnosis missing %q:\n%s", want, res.Final)
 		}
+	}
+}
+
+func TestRunIntentOnboard(t *testing.T) {
+	progressSeen := false
+	a, _ := New(Options{
+		Project: demoProject(), Budget: DefaultBudget(), AutoApprove: true,
+		Onboard: func(ctx context.Context, target string, maxServices int, noRun bool, progress func(string)) (*OnboardResult, error) {
+			if progress != nil {
+				progress("[1/8] Resolving repository source")
+				progressSeen = true
+			}
+			if target != "https://github.com/acme/app" {
+				t.Fatalf("target = %q", target)
+			}
+			return &OnboardResult{
+				Project: "newproj", ProjectID: "new-1",
+				Services: []string{"web(nextjs)"},
+				URLs:     []string{"http://localhost:3000"},
+				Missing:  []string{"JWT_SECRET"},
+			}, nil
+		},
+	})
+	res, err := a.RunIntent(context.Background(), "onboard https://github.com/acme/app", demoContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Onboarded newproj", "http://localhost:3000", "Missing env", "JWT_SECRET"} {
+		if !strings.Contains(res.Final, want) {
+			t.Errorf("onboard final missing %q:\n%s", want, res.Final)
+		}
+	}
+	if res.Intent == nil || res.Intent.Project != "newproj" {
+		t.Fatalf("intent = %+v", res.Intent)
+	}
+	if !progressSeen {
+		t.Fatal("expected onboarding progress events")
+	}
+}
+
+func TestRunIntentOnboardDenied(t *testing.T) {
+	a, _ := New(Options{
+		Project: demoProject(), Budget: DefaultBudget(), AutoApprove: false,
+		Onboard: func(context.Context, string, int, bool, func(string)) (*OnboardResult, error) {
+			t.Fatal("onboard must not run when denied")
+			return nil, nil
+		},
+	})
+	res, err := a.RunIntent(context.Background(), "onboard https://github.com/acme/app", demoContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != StateFailed || !strings.Contains(res.Final, "not approved") {
+		t.Fatalf("unexpected %+v", res)
+	}
+}
+
+func TestRunIntentOnboardFailure(t *testing.T) {
+	a, _ := New(Options{
+		Project: demoProject(), Budget: DefaultBudget(), AutoApprove: true,
+		Onboard: func(context.Context, string, int, bool, func(string)) (*OnboardResult, error) {
+			return &OnboardResult{Project: "broken", ProjectID: "broken-1", URLs: []string{"http://localhost:3000"}}, context.DeadlineExceeded
+		},
+	})
+	res, err := a.RunIntent(context.Background(), "onboard /tmp/broken", demoContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != StateFailed || !strings.Contains(res.Final, "Onboarding failed") || !strings.Contains(res.Final, "Partial URLs") {
+		t.Fatalf("unexpected %+v", res)
 	}
 }

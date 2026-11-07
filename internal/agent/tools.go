@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/monojitgoswami69/spool/internal/config"
 	"github.com/monojitgoswami69/spool/internal/generator"
@@ -82,6 +83,18 @@ func (a *Agent) registerDefaultTools() error {
 				"service": strProp("Optional service name"),
 			}),
 			Handler: a.toolInspectLogsAndHealth,
+		},
+		{
+			Name:        "onboard_repository",
+			Description: "Clone/accept a repo, scan services, infer infra, generate manifests, run, heal, verify, and return live URLs.",
+			Parameters: objectSchema(map[string]any{
+				"target":       strProp("Git URL or local repository path"),
+				"max_services": intProp("Optional maximum services"),
+				"no_run":       map[string]any{"type": "boolean", "description": "Generate manifests without starting"},
+			}, "target"),
+			Mutating: true,
+			Timeout:  20 * time.Minute,
+			Handler:  a.toolOnboardRepository,
 		},
 		{
 			Name:        "heal_service",
@@ -260,6 +273,33 @@ func (a *Agent) toolInspectLogsAndHealth(ctx context.Context, args map[string]an
 	}
 	payload := map[string]any{"logs": logs, "containers": ps, "http": httpResults}
 	b, _ := json.MarshalIndent(payload, "", "  ")
+	return string(b), nil
+}
+
+func (a *Agent) toolOnboardRepository(ctx context.Context, args map[string]any) (string, error) {
+	if a.opts.Onboard == nil {
+		return "", fmt.Errorf("onboarding is not available in this session")
+	}
+	target := argString(args, "target")
+	if target == "" {
+		target = argString(args, "path")
+	}
+	if target == "" {
+		return "", fmt.Errorf("target is required")
+	}
+	res, err := a.opts.Onboard(ctx, target, argInt(args, "max_services", 0), argBool(args, "no_run", false), func(msg string) {
+		a.emit(Event{Type: "tool_progress", Message: msg})
+	})
+	if res == nil {
+		if err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("onboarding returned no result")
+	}
+	b, _ := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("onboarding failed: %w (project=%s urls=%v)", err, res.Project, res.URLs)
+	}
 	return string(b), nil
 }
 

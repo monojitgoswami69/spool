@@ -59,6 +59,21 @@ type EnvAccess interface {
 	Path() string
 }
 
+// OnboardResult is the outcome of an agent-driven repository onboarding.
+type OnboardResult struct {
+	Project     string   `json:"project"`
+	ProjectID   string   `json:"project_id"`
+	Services    []string `json:"services,omitempty"`
+	Infra       []string `json:"infra,omitempty"`
+	URLs        []string `json:"urls,omitempty"`
+	Missing     []string `json:"missing_env,omitempty"`
+	HealSummary string   `json:"heal_summary,omitempty"`
+	NoRun       bool     `json:"no_run,omitempty"`
+}
+
+// OnboardFunc runs the end-to-end onboarding pipeline.
+type OnboardFunc func(ctx context.Context, target string, maxServices int, noRun bool, progress func(string)) (*OnboardResult, error)
+
 // Options configures an Agent.
 type Options struct {
 	LLM          domain.LLMClient
@@ -76,6 +91,7 @@ type Options struct {
 	RepoRoot  string
 	WorkDir   string
 	Env       EnvAccess
+	Onboard   OnboardFunc
 }
 
 // Result is the outcome of a run.
@@ -291,7 +307,11 @@ func (a *Agent) invoke(ctx context.Context, name string, args map[string]any) (s
 	}
 
 	a.emit(Event{Type: "tool_start", Tool: tool.Name, Args: args})
-	callCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	timeout := tool.Timeout
+	if timeout <= 0 {
+		timeout = 3 * time.Minute
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	out, err := tool.Handler(callCtx, args)
 	if err != nil {
@@ -338,6 +358,15 @@ func argString(args map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func argBool(args map[string]any, key string, def bool) bool {
+	if v, ok := args[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return def
 }
 
 func argInt(args map[string]any, key string, def int) int {

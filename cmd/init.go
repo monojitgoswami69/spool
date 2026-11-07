@@ -9,21 +9,14 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/monojitgoswami69/spool/internal/config"
-	"github.com/monojitgoswami69/spool/internal/docker"
 	"github.com/monojitgoswami69/spool/internal/domain"
 	"github.com/monojitgoswami69/spool/internal/envvar"
-	"github.com/monojitgoswami69/spool/internal/generator"
 	"github.com/monojitgoswami69/spool/internal/git"
-	"github.com/monojitgoswami69/spool/internal/infra"
-	"github.com/monojitgoswami69/spool/internal/portprobe"
-	"github.com/monojitgoswami69/spool/internal/reconciler"
 	"github.com/monojitgoswami69/spool/internal/safefs"
-	"github.com/monojitgoswami69/spool/internal/scanner"
 	"github.com/monojitgoswami69/spool/internal/state"
 	"github.com/monojitgoswami69/spool/internal/ui"
 )
@@ -50,7 +43,6 @@ func init() {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	start := time.Now()
 	if !flagQuiet {
 		fmt.Println(ui.Banner(Version))
 		fmt.Println()
@@ -63,153 +55,36 @@ func runInit(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 1. Resolve source.
-	logf("%s", ui.Step(1, 8, "Resolving repository source"))
-	sourcePath, projectName, repoURL, isLocal, err := resolveSource(ctx, target)
+	res, err := runOnboarding(ctx, onboardOptions{
+		Target: target, Name: initName, MaxServices: initMaxSvc,
+		NoRun: initNoRun, NoAgent: initNoAgent,
+		Logf: logf,
+		Progress: func(step, total int, title string) {
+			logf("%s", ui.Step(step, total, title))
+		},
+	})
 	if err != nil {
-		return err
-	}
-	logf("%s", ui.SuccessLine(sourcePath))
-
-	// 2. Scan.
-	logf("%s", ui.Step(2, 8, "Scanning services"))
-	res, err := scanner.Scan(sourcePath)
-	if err != nil {
-		return err
-	}
-	services := res.Services
-	if initMaxSvc > 0 && len(services) > initMaxSvc {
-		services = services[:initMaxSvc]
-	}
-	names := make([]string, 0, len(services))
-	for _, s := range services {
-		names = append(names, fmt.Sprintf("%s(%s)", s.Name, s.Framework))
-	}
-	logf("%s", ui.SuccessLine(fmt.Sprintf("%d service(s): %s", len(services), strings.Join(names, ", "))))
-
-	// 3. Prepare project + allocator.
-	logf("%s", ui.Step(3, 8, "Discovering environment variables"))
-	identity := sourcePath
-	if repoURL != "" {
-		identity = repoURL
-	}
-	id := state.IDFor(projectName, identity)
-	mgr, err := state.Ensure(id)
-	if err != nil {
-		return err
-	}
-	project := &domain.Project{
-		ID: id, Name: projectName, SourcePath: sourcePath, IsLocal: isLocal,
-		WorkDir: mgr.Dir, Services: services, NetworkName: id + "-net",
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
-	}
-	project.Env = envvar.DiscoverEnvVars(sourcePath)
-	sourceEnv := loadSourceEnv(sourcePath, services)
-	project.Env = mergeDiscoveredEnv(project.Env, sourceEnv)
-	logf("%s", ui.SuccessLine(fmt.Sprintf("%d variable(s) (%d from repo .env)", len(project.Env), len(sourceEnv))))
-
-	// 4. Infer infra FIRST so its host ports are reserved before app ports.
-	logf("%s", ui.Step(4, 8, "Inferring infrastructure"))
-	alloc := portprobe.New()
-	deps := dependencySet(services)
-	infras, err := infra.Infer(project.Env, deps, infra.Options{SourcePath: sourcePath, Allocator: alloc})
-	if err != nil {
-		return err
-	}
-	project.InfraServices = infras
-	if err := reconciler.Reconcile(project.Services, alloc, map[string]string{}); err != nil {
-		return err
-	}
-	logf("%s", ui.SuccessLine(describeInfra(infras)))
-
-	// 5. Generate manifests.
-	logf("%s", ui.Step(5, 8, "Generating Dockerfiles and compose"))
-	lock := &domain.Lock{
-		Version: Version, Project: projectName, ProjectID: id, RepoURL: repoURL,
-		RepoPath: sourcePath, WorkDir: mgr.Dir, Services: project.Services, Infra: infras,
-		PortMap: portMap(project.Services), Env: project.Env, NetworkName: project.NetworkName,
-		DetectionHash: state.HashDetection(project.Services), LastInit: time.Now(),
-	}
-	out, err := generator.WriteOutputs(project, mgr.Dir, sourcePath)
-	if err != nil {
-		return err
-	}
-	logf("%s", ui.SuccessLine(fmt.Sprintf("%d manifest(s) in %s", len(out.Files), mgr.Dir)))
-
-	// 6. Write .env and lock.
-	logf("%s", ui.Step(6, 8, "Writing environment and state"))
-	if len(sourceEnv) > 0 {
-		existing, _ := mgr.LoadEnv()
-		for k, v := range sourceEnv {
-			existing[k] = v
+		if res != nil {
+			printFailureReport(res.Manager, res.Lock, res.Heal, err)
 		}
-		if err := mgr.SaveEnv(existing); err != nil {
-			return err
-		}
-	}
-	if err := writeProjectEnv(mgr, lock); err != nil {
 		return err
-	}
-	if err := mgr.SaveLock(lock); err != nil {
-		return err
-	}
-	logf("%s", ui.SuccessLine("state persisted"))
-	printEnvStatus(mgr, lock)
-	if docker.Available() {
-		if err := composeFor(mgr).Validate(ctx); err != nil {
-			return fmt.Errorf("generated compose is invalid: %w", err)
-		}
 	}
 
+	printEnvStatus(res.Manager, res.Lock)
 	if initNoRun {
-		logf("%s", ui.Step(7, 8, "Skipping run (--no-run)"))
-		logf("%s", ui.Step(8, 8, fmt.Sprintf("Ready in %.1fs", time.Since(start).Seconds())))
 		logf("")
-		logf("Next: %s", ui.BoldStyle.Render("spool up "+mgr.ID))
+		logf("Next: %s", ui.BoldStyle.Render("spool up "+res.Manager.ID))
 		return nil
 	}
-
-	// 7. Orchestrate + heal (closed loop; health is never discarded).
-	logf("%s", ui.Step(7, 8, "Building and verifying the stack"))
-	if err := requireDocker(ctx); err != nil {
-		return err
-	}
-	var client domain.LLMClient
-	if !initNoAgent {
-		if c, lerr := llmFor(true); lerr == nil {
-			client = c
-			verbosef("LLM repair enabled")
-		} else {
-			logf("%s", ui.WarningLine("LLM unavailable ("+lerr.Error()+"); using deterministic repairs only"))
-		}
-	}
-	h, err := healerFor(mgr, lock, client)
-	if err != nil {
-		return err
-	}
-	h.MaxTries = 3
-	healRes, err := h.Heal(ctx, "", "")
-	if err != nil {
-		printFailureReport(mgr, lock, healRes, err)
-		return err
-	}
-	lock.LastUp = time.Now()
-	clearFailureLog(mgr)
-	if err := mgr.SaveLock(lock); err != nil {
-		return err
-	}
-
-	// 8. Report.
-	logf("%s", ui.Step(8, 8, fmt.Sprintf("Stack healthy in %.1fs", time.Since(start).Seconds())))
 	logf("")
-	showStatus(ctx, mgr, lock)
-	printURLs(lock)
+	showStatus(ctx, res.Manager, res.Lock)
+	printURLs(res.Lock)
 	logf("")
-	logf("%s", ui.InfoLine(fmt.Sprintf("project %s · state %s", mgr.ID, mgr.Dir)))
+	logf("%s", ui.InfoLine(fmt.Sprintf("project %s · state %s", res.Manager.ID, res.Manager.Dir)))
 	return nil
 }
 
-func resolveSource(ctx context.Context, target string) (sourcePath, name, repoURL string, isLocal bool, err error) {
+func resolveSource(ctx context.Context, target string, logf func(format string, args ...any)) (sourcePath, name, repoURL string, isLocal bool, err error) {
 	if git.IsRemote(target) {
 		parsed, perr := git.ParseURL(target)
 		if perr != nil {

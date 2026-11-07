@@ -179,3 +179,31 @@ func TestUpdatePreservesHostPortsE2E(t *testing.T) {
 		t.Fatalf("missing new Dockerfile: %v", err)
 	}
 }
+
+func TestAskOnboardNoRunE2E(t *testing.T) {
+	t.Setenv("SPOOL_HOME", t.TempDir())
+	repo := t.TempDir()
+	writeFixture(t, repo, "package.json", `{"name":"ask-onboard","dependencies":{"next":"16"},"scripts":{"build":"next build","start":"next start"}}`)
+
+	oldQuiet, oldYes := flagQuiet, flagYes
+	flagQuiet, flagYes = true, true
+	defer func() { flagQuiet, flagYes = oldQuiet, oldYes }()
+
+	if err := runAsk(nil, []string{"onboard", repo, "--no-run"}); err != nil {
+		t.Fatalf("ask onboard: %v", err)
+	}
+	managers, err := state.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(managers) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(managers))
+	}
+	lock, err := managers[0].LoadLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lock.Services) != 1 {
+		t.Fatalf("expected 1 service, got %+v", lock.Services)
+	}
+}

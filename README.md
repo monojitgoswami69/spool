@@ -179,10 +179,13 @@ Design rules:
 Spool is not a Docker wrapper with a chatbot bolted on. The agent harness is the
 core:
 
-- **Typed tool registry** — `scan_repository`, `infer_infrastructure`,
-  `synthesize_manifests`, `orchestrate_stack`, `inspect_logs_and_health`,
-  `diagnose_failure`, `heal_service`, `read_repo_file`, `explain_topology`,
-  `start_public_tunnel`.
+- **Typed tool registry** — `onboard_repository`, `scan_repository`,
+  `infer_infrastructure`, `synthesize_manifests`, `orchestrate_stack`,
+  `inspect_logs_and_health`, `diagnose_failure`, `heal_service`,
+  `read_repo_file`, `explain_topology`, `start_public_tunnel`.
+- **Agent-native onboarding** — from a clean slate (even with zero projects),
+  `spool ask --yes "onboard <url>"` or `/onboard <url>` in chat clones, scans,
+  generates, runs, heals, verifies, and returns live URLs.
 - **Intent engine** — every request is parsed into a structured intent
   (`status`, `diagnose`, `heal`, `env_set`, ...) with project/service
   validation. High-confidence intents execute tools directly; ambiguous ones

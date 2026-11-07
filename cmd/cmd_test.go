@@ -12,7 +12,7 @@ import (
 func TestResolveSourceLocal(t *testing.T) {
 	flagQuiet = true
 	dir := t.TempDir()
-	path, name, url, isLocal, err := resolveSource(context.Background(), dir)
+	path, name, url, isLocal, err := resolveSource(context.Background(), dir, func(string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestResolveSourceLocal(t *testing.T) {
 
 func TestResolveSourceRejectsMissing(t *testing.T) {
 	flagQuiet = true
-	if _, _, _, _, err := resolveSource(context.Background(), filepath.Join(t.TempDir(), "nope")); err == nil {
+	if _, _, _, _, err := resolveSource(context.Background(), filepath.Join(t.TempDir(), "nope"), func(string, ...any) {}); err == nil {
 		t.Fatal("expected error for missing path")
 	}
 }

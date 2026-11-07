@@ -195,12 +195,10 @@ func checkDaemon(ctx context.Context) error {
 	return nil
 }
 
-// printEnvStatus surfaces unresolved configuration right after init/update so a
-// developer knows exactly what to set.
-func printEnvStatus(mgr *state.Manager, lock *domain.Lock) {
+func missingEnvKeys(mgr *state.Manager, lock *domain.Lock) []string {
 	merged, err := renderEnv(mgr, lock)
 	if err != nil {
-		return
+		return nil
 	}
 	var missing []string
 	for _, ev := range lock.Env {
@@ -211,10 +209,26 @@ func printEnvStatus(mgr *state.Manager, lock *domain.Lock) {
 			missing = append(missing, ev.Key)
 		}
 	}
+	sort.Strings(missing)
+	return missing
+}
+
+func urlStrings(lock *domain.Lock) []string {
+	pairs := projectURLs(lock)
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, p.URL)
+	}
+	return out
+}
+
+// printEnvStatus surfaces unresolved configuration right after init/update so a
+// developer knows exactly what to set.
+func printEnvStatus(mgr *state.Manager, lock *domain.Lock) {
+	missing := missingEnvKeys(mgr, lock)
 	if len(missing) == 0 {
 		return
 	}
-	sort.Strings(missing)
 	shown := missing
 	extra := ""
 	if len(shown) > 10 {

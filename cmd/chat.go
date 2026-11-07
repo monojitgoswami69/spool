@@ -110,14 +110,20 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{role: "assistant", text: "I hit an error: " + msg.err.Error()})
 		} else if msg.res != nil {
 			m.messages = append(m.messages, chatMessage{role: "assistant", text: msg.res.Final})
-			if msg.res.Intent != nil && msg.res.Intent.Kind == agent.IntentSwitchProject && msg.res.Intent.Project != "" {
-				if mgr, lock, err := resolveProject(msg.res.Intent.Project); err == nil {
-					if ag, aerr := buildChatAgent(m.client, mgr, lock, m.eventHandler(), m.confirmHandler()); aerr == nil {
-						if m.ag != nil {
-							_ = m.ag.Close()
+			if msg.res.Intent != nil {
+				if msg.res.Intent.Service != "" {
+					m.service = msg.res.Intent.Service
+				}
+				if (msg.res.Intent.Kind == agent.IntentSwitchProject || msg.res.Intent.Kind == agent.IntentOnboard) && msg.res.Intent.Project != "" {
+					if mgr, lock, err := resolveProject(msg.res.Intent.Project); err == nil {
+						if ag, aerr := buildChatAgent(m.client, mgr, lock, m.eventHandler(), m.confirmHandler()); aerr == nil {
+							if m.ag != nil {
+								_ = m.ag.Close()
+							}
+							m.mgr, m.lock, m.ag = mgr, lock, ag
+							m.service = ""
+							m.messages = append(m.messages, chatMessage{role: "assistant", text: "Context is now **" + lock.Project + "**."})
 						}
-						m.mgr, m.lock, m.ag = mgr, lock, ag
-						m.messages = append(m.messages, chatMessage{role: "assistant", text: "Context is now **" + lock.Project + "**."})
 					}
 				}
 			}
@@ -224,6 +230,7 @@ func (m *chatModel) slash(input string) tea.Cmd {
 			"· nuke (confirmation required)",
 			"· tunnel [port] / preview     · scan <path-or-url>",
 			"· read file <path>            · use project <name>",
+			"· onboard <git-url-or-path>   · diagnose",
 			"",
 			"Slash commands: /status /explain /heal /tunnel /nuke /nuke-confirm /clear /help",
 		}, "\n")})
@@ -231,6 +238,18 @@ func (m *chatModel) slash(input string) tea.Cmd {
 	case "/clear":
 		m.messages = nil
 		return nil
+	case "/onboard":
+		target := strings.TrimSpace(strings.TrimPrefix(input, "/onboard"))
+		if target == "" {
+			m.messages = append(m.messages, chatMessage{role: "assistant", text: "Usage: /onboard <git-url-or-path>"})
+			return nil
+		}
+		if m.ag == nil {
+			m.messages = append(m.messages, chatMessage{role: "assistant", text: "No agent is available."})
+			return nil
+		}
+		m.busy = true
+		return runIntentCmd(m.ctx, m.ag, "onboard "+target, m.intentContext())
 	case "/diagnose":
 		if m.ag == nil {
 			m.messages = append(m.messages, chatMessage{role: "assistant", text: "No agent is available."})
@@ -372,6 +391,11 @@ func formatEvent(ev agent.Event) string {
 	switch ev.Type {
 	case "intent":
 		return ui.TitleStyle.Render("🎯 " + ev.Message)
+	case "tool_progress":
+		if ev.Message == "" {
+			return ""
+		}
+		return ui.MutedStyle.Render("· " + ev.Message)
 	case "tool_start":
 		return ui.TitleStyle.Render("⚡ " + ev.Tool + " " + shortArgs(ev.Args))
 	case "tool_end":
@@ -585,7 +609,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 	m.ag = ag
 	defer ag.Close()
-	welcome := "I am an agent with real tools: scan, infer, generate manifests, orchestrate, inspect logs/health, diagnose failures, heal, explain topology, manage env, read repo files, and open tunnels. Ask naturally — I restate the intent before acting. Try `/help`."
+	welcome := "I am an agent with real tools: onboard repositories, scan, infer, generate manifests, orchestrate, inspect logs/health, diagnose failures, heal, explain topology, manage env, read repo files, and open tunnels. Ask naturally — I restate the intent before acting. Try `/help`."
 	if client == nil {
 		welcome = "LLM is not configured, so I am in deterministic intent mode: status, health, diagnose, explain, logs, env, heal, up/down/restart, nuke, scan, tunnel, file reads. Try `/help`."
 	}
@@ -609,6 +633,9 @@ func buildChatAgent(client domain.LLMClient, mgr *state.Manager, lock *domain.Lo
 		Allocator:    portprobe.New(),
 		EventHandler: onEvent,
 		Confirm:      confirm,
+		Onboard: func(ctx context.Context, target string, maxServices int, noRun bool, progress func(string)) (*agent.OnboardResult, error) {
+			return onboardForAgent(ctx, target, maxServices, noRun, progress, client)
+		},
 	}
 	if mgr != nil {
 		opts.WorkJail, _ = safefs.NewJail(mgr.Dir)

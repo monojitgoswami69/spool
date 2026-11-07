@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/monojitgoswami69/spool/internal/llm"
 )
@@ -19,7 +20,9 @@ type Tool struct {
 	Parameters  map[string]any
 	Mutating    bool
 	Destructive bool
-	Handler     func(ctx context.Context, args map[string]any) (string, error)
+	// Timeout bounds a single tool invocation. Zero means the default (3m).
+	Timeout time.Duration
+	Handler func(ctx context.Context, args map[string]any) (string, error)
 }
 
 // Registry holds tools by name.

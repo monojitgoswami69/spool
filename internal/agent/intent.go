@@ -37,6 +37,7 @@ const (
 	IntentTunnel        IntentKind = "tunnel"
 	IntentReadFile      IntentKind = "read_file"
 	IntentGenerate      IntentKind = "generate"
+	IntentOnboard       IntentKind = "onboard"
 	IntentSwitchProject IntentKind = "switch_project"
 	IntentHelp          IntentKind = "help"
 	IntentChat          IntentKind = "chat"
@@ -64,7 +65,9 @@ type Intent struct {
 	Key                string     `json:"key,omitempty"`
 	Value              string     `json:"value,omitempty"`
 	Path               string     `json:"path,omitempty"`
+	Target             string     `json:"target,omitempty"`
 	Port               int        `json:"port,omitempty"`
+	NoRun              bool       `json:"no_run,omitempty"`
 	Confidence         float64    `json:"confidence"`
 	Goal               string     `json:"goal,omitempty"`
 	NeedsClarification bool       `json:"needs_clarification,omitempty"`
@@ -94,12 +97,24 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 	if it.Service == "" {
 		it.Service = ictx.CurrentService
 	}
+	if it.Service == "" && ictx.CurrentService != "" && containsAny(lower, " it", "it ", "that service", "this service", "that one") {
+		it.Service = ictx.CurrentService
+	}
 
 	switch {
 	case containsAny(lower, "is it up", "is it running", "is the app up", "is everything up", "what is running", "what's running", "whats running"):
 		it.Kind, it.Confidence = IntentStatus, 0.95
 	case containsAny(lower, "help", "what can you do", "what do you do", "commands", "how do i use"):
 		it.Kind, it.Confidence = IntentHelp, 0.95
+	case containsAny(lower, "onboard", "set up repo", "setup repo", "init repo", "bootstrap", "bring in repo", "add repo", "onboard repo"):
+		it.Kind, it.Confidence = IntentOnboard, 0.92
+		it.Target = extractTarget(raw)
+		it.NoRun = containsAny(lower, "no-run", "no run", "generate only", "don't run", "dont run", "without running")
+		if it.Target == "" {
+			it.NeedsClarification = true
+			it.Clarification = "Which repository should I onboard? Give me a Git URL or a local path."
+			it.Confidence = 0.5
+		}
 	case containsAny(lower, "switch to", "switch project", "use project", "select project", "focus on project", "work on project"):
 		it.Kind, it.Confidence = IntentSwitchProject, 0.9
 		if it.Project == "" {
@@ -154,7 +169,7 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 		it.Path = strings.Trim(m[1], `"'`)
 	}
 
-	if it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject {
+	if it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject && it.Kind != IntentOnboard {
 		if it.Project == "" && len(ictx.Projects) > 1 {
 			it.NeedsClarification = true
 			it.Clarification = "Which project do you mean?" + availableProjects(ictx)
@@ -213,7 +228,7 @@ func ClassifyIntent(ctx context.Context, client domain.LLMClient, text string, i
 		it.Clarification = fmt.Sprintf("I don't see service %q in %s.", it.Service, it.Project)
 		it.Confidence = 0.4
 	}
-	if it.Project == "" && it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject {
+	if it.Project == "" && it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject && it.Kind != IntentOnboard {
 		if ictx.CurrentProject != "" {
 			it.Project = ictx.CurrentProject
 		} else if len(ictx.Projects) == 1 {
@@ -271,6 +286,8 @@ func (it Intent) Describe() string {
 		return "read " + it.Path
 	case IntentGenerate:
 		return "generate manifests" + target
+	case IntentOnboard:
+		return "onboard " + it.Target
 	case IntentSwitchProject:
 		return "switch to " + it.Project
 	case IntentHelp:
@@ -323,6 +340,8 @@ func (a *Agent) RunIntent(ctx context.Context, text string, ictx IntentContext) 
 			return res, nil
 		}
 		return a.Run(ctx, SystemPrompt, intentAwarePrompt(text, ictx, intent))
+	case IntentOnboard:
+		return a.runOnboardIntent(ctx, intent)
 	case IntentSwitchProject:
 		res := a.resultFor(fmt.Sprintf("Switching context to %s.", intent.Project), intent)
 		return res, nil
@@ -513,6 +532,102 @@ func (a *Agent) intentHealth(ctx context.Context, it Intent) (string, error) {
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
+func extractTarget(raw string) string {
+	if m := regexp.MustCompile(`(?:https?://|git@)\S+`).FindString(raw); m != "" {
+		return strings.Trim(m, `"'`)
+	}
+	for _, f := range strings.Fields(raw) {
+		f = strings.Trim(f, `"'`)
+		if strings.HasPrefix(f, "-") {
+			continue
+		}
+		if strings.HasPrefix(f, "/") || strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../") {
+			return f
+		}
+		if strings.HasPrefix(f, "github.com/") {
+			return "https://" + f
+		}
+		if strings.Count(f, "/") == 1 && !strings.Contains(f, "=") && !strings.Contains(f, ".") {
+			return "https://github.com/" + f
+		}
+		if strings.Contains(f, "/") && (strings.Contains(f, "fixture") || strings.HasPrefix(f, "test/") || strings.Contains(f, ".")) {
+			return f
+		}
+	}
+	return ""
+}
+
+func (a *Agent) runOnboardIntent(ctx context.Context, it Intent) (*Result, error) {
+	if a.opts.Onboard == nil {
+		res := a.resultFor("Onboarding is not available in this session.", it)
+		res.State = StateFailed
+		return res, nil
+	}
+	args := map[string]any{"target": it.Target, "no_run": it.NoRun}
+	if !a.opts.AutoApprove {
+		if a.opts.Confirm == nil || !a.opts.Confirm("onboard_repository", false, args) {
+			a.emit(Event{Type: "permission_denied", Tool: "onboard_repository", Args: args, Message: "onboarding denied"})
+			res := a.resultFor("Onboarding was not approved.", it)
+			res.State = StateFailed
+			return res, nil
+		}
+	}
+	a.emit(Event{Type: "tool_start", Tool: "onboard_repository", Args: args})
+	out, err := a.opts.Onboard(ctx, it.Target, 0, it.NoRun, func(msg string) {
+		a.emit(Event{Type: "tool_progress", Message: msg})
+	})
+	if err != nil {
+		msg := "Onboarding failed: " + err.Error()
+		if out != nil {
+			if out.Project != "" {
+				it.Project = out.Project
+				msg = "Onboarding failed for **" + out.Project + "**: " + err.Error()
+			}
+			if len(out.URLs) > 0 {
+				msg += "\n\nPartial URLs: " + strings.Join(out.URLs, ", ")
+			}
+			if len(out.Missing) > 0 {
+				msg += "\n\nMissing env: `" + strings.Join(out.Missing, "`, `") + "`"
+			}
+		}
+		a.emit(Event{Type: "tool_end", Tool: "onboard_repository", Success: false, Message: err.Error()})
+		res := a.resultFor(msg, it)
+		res.State = StateFailed
+		return res, nil
+	}
+	it.Project = out.Project
+	a.emit(Event{Type: "tool_end", Tool: "onboard_repository", Success: true, Message: out.Project})
+	return a.resultFor(formatOnboard(out), it), nil
+}
+
+func formatOnboard(out *OnboardResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "**Onboarded %s** (`%s`)\n", out.Project, out.ProjectID)
+	if out.NoRun {
+		b.WriteString("\nGeneration complete (containers were not started).\n")
+	}
+	if len(out.URLs) > 0 {
+		b.WriteString("\n**Live endpoints**\n")
+		for _, u := range out.URLs {
+			fmt.Fprintf(&b, "- %s\n", u)
+		}
+	}
+	if len(out.Services) > 0 {
+		fmt.Fprintf(&b, "\n**Services**: %s\n", strings.Join(out.Services, ", "))
+	}
+	if len(out.Infra) > 0 {
+		fmt.Fprintf(&b, "**Infrastructure**: %s\n", strings.Join(out.Infra, ", "))
+	}
+	if len(out.Missing) > 0 {
+		fmt.Fprintf(&b, "\n**Missing env**: `%s`\n", strings.Join(out.Missing, "`, `"))
+		fmt.Fprintf(&b, "Set them with `spool env %s set KEY=VALUE`.\n", out.ProjectID)
+	}
+	if strings.TrimSpace(out.HealSummary) != "" {
+		fmt.Fprintf(&b, "\n**Heal**: %s\n", out.HealSummary)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (a *Agent) intentDiagnose(ctx context.Context, it Intent) (string, error) {
 	if a.opts.Project == nil || a.opts.Compose == nil {
 		return "", domain.E(domain.KindNotFound, "agent.diagnose", "no project or compose controller loaded", nil)
@@ -693,7 +808,7 @@ PROJECT/SERVICE CONTEXT:
 REQUEST:
 %s
 
-Allowed intents: status, health, explain, logs, env_list, env_set, env_unset, heal, up, down, restart, nuke, scan, tunnel, read_file, generate, switch_project, help, chat.
+Allowed intents: status, health, explain, logs, env_list, env_set, env_unset, heal, up, down, restart, nuke, scan, tunnel, read_file, generate, onboard, switch_project, help, chat.
 Rules:
 - Use only project names/ids and services from the context. Never invent them.
 - If the target is ambiguous or unknown, set needs_clarification=true and ask one short question.
@@ -724,6 +839,7 @@ func helpText() string {
 		"- `tunnel [port]` — public preview URL",
 		"- `read file <path>` — jailed file read",
 		"- `use project <name>` — switch context",
+		"- `onboard <path-or-url>` — clone, scan, generate, run, heal, and report live URLs",
 		"",
 		"Ask naturally; I will restate the intent before acting.",
 	}, "\n")

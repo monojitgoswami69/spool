@@ -40,10 +40,14 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 	mgr, lock, err := resolveProject(project)
 	if err != nil {
-		if errors.Is(err, domain.ErrNoProjects) {
-			return fmt.Errorf("no projects initialized; run `spool init <path-or-url>` first")
+		if errors.Is(err, domain.ErrNoProjects) && strings.Contains(strings.ToLower(request), "onboard") {
+			// The agent can onboard a repo from a completely clean slate.
+			mgr, lock = nil, nil
+		} else if errors.Is(err, domain.ErrNoProjects) {
+			return fmt.Errorf("no projects initialized; ask me to `onboard <path-or-url>` or run `spool init`")
+		} else {
+			return err
 		}
-		return err
 	}
 
 	client, _ := llmFor(true)
@@ -55,6 +59,8 @@ func runAsk(cmd *cobra.Command, args []string) error {
 			if flagVerbose {
 				logf("%s", ui.MutedStyle.Render("⚡ "+ev.Tool))
 			}
+		case "tool_progress":
+			logf("%s", ui.MutedStyle.Render("· "+ev.Message))
 		case "permission_denied":
 			logf("%s", ui.WarningLine("denied "+ev.Tool))
 		}
@@ -78,10 +84,15 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	defer ag.Close()
 
 	ictx := intentContext()
-	ictx.CurrentProject = lock.Project
+	if lock != nil {
+		ictx.CurrentProject = lock.Project
+	}
 	res, err := ag.RunIntent(context.Background(), request, ictx)
 	if res != nil && strings.TrimSpace(res.Final) != "" {
 		fmt.Println(ui.Markdown(res.Final))
+	}
+	if err == nil && res != nil && res.State == agent.StateFailed {
+		return fmt.Errorf("%s", strings.TrimSpace(res.Final))
 	}
 	return err
 }
