@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -9,7 +12,10 @@ import (
 	"github.com/monojitgoswami69/spool/internal/ui"
 )
 
-var upBuild bool
+var (
+	upBuild    bool
+	upRecreate bool
+)
 
 var upCmd = &cobra.Command{
 	Use:   "up [project]",
@@ -20,10 +26,12 @@ var upCmd = &cobra.Command{
 
 func init() {
 	upCmd.Flags().BoolVar(&upBuild, "build", false, "rebuild images before starting")
+	upCmd.Flags().BoolVar(&upRecreate, "recreate", false, "force-recreate containers (applies env changes)")
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	name := ""
 	if len(args) > 0 {
 		name = args[0]
@@ -43,6 +51,13 @@ func runUp(cmd *cobra.Command, args []string) error {
 		logf("%s", ui.InfoLine("building images"))
 		if out, err := compose.Build(ctx, ""); err != nil {
 			return err
+		} else {
+			verbosef("%s", out)
+		}
+	}
+	if upRecreate {
+		if out, uerr := compose.Up(ctx, "--force-recreate"); uerr != nil {
+			return uerr
 		} else {
 			verbosef("%s", out)
 		}

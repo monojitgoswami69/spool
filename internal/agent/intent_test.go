@@ -98,6 +98,13 @@ func TestParseIntentTable(t *testing.T) {
 		{"read file src/app/page.tsx", IntentReadFile, "demo", "", "", "", 0, 0.85, false},
 		{"scan this repo", IntentScan, "", "", "", "", 0, 0.9, false},
 		{"use project other", IntentSwitchProject, "other", "", "", "", 0, 0.9, false},
+		{"is the app up", IntentStatus, "demo", "", "", "", 0, 0.95, false},
+		{"what's running", IntentStatus, "demo", "", "", "", 0, 0.95, false},
+		{"spin up the app", IntentUp, "demo", "", "", "", 0, 0.85, false},
+		{"check the health", IntentHealth, "demo", "", "", "", 0, 0.9, false},
+		{"restart the web service", IntentRestart, "demo", "web", "", "", 0, 0.9, false},
+		{"take it down", IntentDown, "demo", "", "", "", 0, 0.9, false},
+		{"show me the logs", IntentLogs, "demo", "", "", "", 0, 0.9, false},
 		{"tell me a joke", IntentChat, "demo", "", "", "", 0, 0.0, false},
 	}
 	for _, c := range cases {

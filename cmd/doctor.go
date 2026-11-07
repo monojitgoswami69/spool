@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 
@@ -58,6 +59,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	logf("%s", ui.Table([]string{"", "Check", "Detail"}, rows, "environment"))
 	if !checks[1].ok || !checks[2].ok {
 		logf("%s", ui.WarningLine("Docker is required to run stacks. Install/start Docker, then re-run doctor."))
+		return fmt.Errorf("critical environment checks failed: Docker is required")
 	}
 	return nil
 }

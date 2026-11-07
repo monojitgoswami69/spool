@@ -94,6 +94,8 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 	}
 
 	switch {
+	case containsAny(lower, "is it up", "is it running", "is the app up", "is everything up", "what is running", "what's running", "whats running"):
+		it.Kind, it.Confidence = IntentStatus, 0.95
 	case containsAny(lower, "help", "what can you do", "what do you do", "commands", "how do i use"):
 		it.Kind, it.Confidence = IntentHelp, 0.95
 	case containsAny(lower, "switch to", "switch project", "use project", "select project", "focus on project", "work on project"):
@@ -117,7 +119,7 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 		it.Kind, it.Confidence = IntentRestart, 0.9
 	case hasWord(lower, "heal") || containsAny(lower, "self-heal", "self heal", "repair", "fix it", "fix the"):
 		it.Kind, it.Confidence = IntentHeal, 0.9
-	case containsAny(lower, "shut down", "shutdown", "stop the", "stop it", "down", "take down"):
+	case containsAny(lower, "shut down", "shutdown", "stop the", "stop it", "down", "take down", "take it down", "shut it down", "kill it"):
 		it.Kind, it.Confidence = IntentDown, 0.9
 	case containsAny(lower, "bring up", "boot", "start the", "start it", " up", "up ", "run the", "launch"):
 		it.Kind, it.Confidence = IntentUp, 0.85

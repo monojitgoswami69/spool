@@ -219,7 +219,7 @@ func Detect(relPath, dir string, pyproj *PyProject, pm domain.PackageManager) *d
 		}
 	}
 	if svc.RuntimeVersion == "" {
-		svc.RuntimeVersion = fsutil.MajorVersion(fsutil.RuntimeVersionFromFile(filepath.Join(dir, ".python-version")))
+		svc.RuntimeVersion = pythonMajorMinor(fsutil.RuntimeVersionFromFile(filepath.Join(dir, ".python-version")))
 	}
 
 	hasManage := fsutil.Exists(filepath.Join(dir, "manage.py"))

@@ -1,10 +1,10 @@
 BINARY      := spool
 MODULE      := github.com/monojitgoswami69/spool
-VERSION     ?= v0.1.0
+VERSION     ?= v0.2.0
 BUILD_TIME  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS     := -s -w -X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildTime=$(BUILD_TIME)
 
-.PHONY: all build test race vet fmt tidy install clean run help
+.PHONY: all build test race vet fmt fmt-check check e2e tidy install clean run release help
 
 all: build
 
@@ -23,11 +23,22 @@ vet: ## Run go vet
 fmt: ## Format all Go files
 	gofmt -w .
 
+fmt-check: ## Fail if any Go file is not formatted
+	@files="$$(gofmt -l .)"; if [ -n "$$files" ]; then echo "$$files"; exit 1; fi
+
+check: fmt-check vet test race ## Run the full verification suite
+
+e2e: ## Run the no-Docker end-to-end pipeline test
+	go test ./cmd -run TestInitPipelineNoRunE2E -v
+
 tidy: ## Tidy module dependencies
 	go mod tidy
 
 install: ## Install spool into GOBIN
 	go install -trimpath -ldflags "$(LDFLAGS)" .
+
+release: ## Build release artifacts with goreleaser
+	goreleaser release --clean
 
 clean: ## Remove build artifacts
 	rm -f $(BINARY)

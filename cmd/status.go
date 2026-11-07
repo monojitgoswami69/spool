@@ -7,22 +7,24 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/monojitgoswami69/spool/internal/docker"
 	"github.com/monojitgoswami69/spool/internal/domain"
 	"github.com/monojitgoswami69/spool/internal/state"
 	"github.com/monojitgoswami69/spool/internal/ui"
 )
 
 var statusCmd = &cobra.Command{
-	Use:   "status [project]",
-	Short: "Show project or container status",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runStatus,
+	Use:     "status [project]",
+	Aliases: []string{"list"},
+	Short:   "Show project or container status",
+	Args:    cobra.MaximumNArgs(1),
+	RunE:    runStatus,
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	if len(args) == 0 {
-		return listProjects()
+		return listProjects(ctx)
 	}
 	mgr, lock, err := resolveProject(args[0])
 	if err != nil {
@@ -33,7 +35,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func listProjects() error {
+func listProjects(ctx context.Context) error {
 	managers, err := state.List()
 	if err != nil {
 		return err
@@ -42,20 +44,34 @@ func listProjects() error {
 		logf("%s", ui.MutedStyle.Render("No projects yet. Run `spool init <path-or-url>`."))
 		return nil
 	}
+	canQuery := docker.Available() && docker.DaemonRunning(ctx)
 	var rows [][]string
 	for _, m := range managers {
 		lock, err := m.LoadLock()
 		if err != nil {
 			continue
 		}
+		running := "-"
+		if canQuery {
+			if ps, perr := composeFor(m).Ps(ctx); perr == nil {
+				n := 0
+				for _, c := range ps {
+					if c.State == "running" {
+						n++
+					}
+				}
+				running = fmt.Sprintf("%d/%d", n, len(ps))
+			}
+		}
 		rows = append(rows, []string{
 			m.ID,
+			running,
 			fmt.Sprintf("%d", len(lock.Services)),
 			fmt.Sprintf("%d", len(lock.Infra)),
 			humanTime(lock.LastInit),
 		})
 	}
-	logf("%s", ui.Table([]string{"Project", "Services", "Infra", "Last init"}, rows, "projects"))
+	logf("%s", ui.Table([]string{"Project", "Running", "Services", "Infra", "Last init"}, rows, "projects"))
 	return nil
 }
 

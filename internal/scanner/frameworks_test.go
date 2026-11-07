@@ -308,3 +308,17 @@ func TestExamplesDirectoryIgnored(t *testing.T) {
 		t.Fatal("examples-only project must not yield a service")
 	}
 }
+
+func TestPythonDotPythonVersion(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "pyproject.toml", "[project]\nname=\"a\"\ndependencies=[\"fastapi\"]\n")
+	writeRaw(t, root, "main.py", "from fastapi import FastAPI\napp=FastAPI()\n")
+	writeRaw(t, root, ".python-version", "3.12.4\n")
+	svcs, err := ScanRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svcs[0].RuntimeVersion != "3.12" {
+		t.Fatalf("runtime = %q want 3.12", svcs[0].RuntimeVersion)
+	}
+}

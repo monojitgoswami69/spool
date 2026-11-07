@@ -13,7 +13,7 @@ import (
 
 // Version and BuildTime are injected via -ldflags.
 var (
-	Version   = "v0.1.0"
+	Version   = "v0.2.0"
 	BuildTime = "dev"
 )
 
@@ -44,7 +44,6 @@ func Execute() {
 		}
 		config.LoadEnvIntoProcess()
 	}
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.SetVersionTemplate(fmt.Sprintf("Spool %s (built %s)\n", Version, BuildTime))
 
 	if err := rootCmd.Execute(); err != nil {

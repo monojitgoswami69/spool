@@ -1,5 +1,7 @@
 # Spool
 
+[![ci](https://github.com/monojitgoswami69/spool/actions/workflows/ci.yml/badge.svg)](https://github.com/monojitgoswami69/spool/actions/workflows/ci.yml)
+
 **Autonomous infrastructure control plane & self-healing DevOps agent.**
 
 Spool takes any repository — a local path or a Git URL — and turns it into a
@@ -60,6 +62,8 @@ cd spool
 make install          # installs to $(go env GOPATH)/bin
 # or
 make build            # produces ./spool
+# or
+./install.sh          # builds and installs to ~/.local/bin
 ```
 
 Requires Go 1.27+ and Docker with Compose v2.
@@ -101,23 +105,30 @@ tunnel tooling.
 | `spool init [path-or-url]` | Full pipeline: clone → scan → infer → generate → build → heal → verify |
 | `spool chat [project]` | Interactive, intent-aware agent REPL |
 | `spool ask [project] <request>` | One-shot intent-aware request (prints the parsed intent first) |
-| `spool up [project]` | Start a stack and wait for real health |
+| `spool up [project]` | Start a stack and wait for real health (`--build`, `--recreate`) |
 | `spool down [project]` | Stop a stack (`--volumes` removes volumes) |
+| `spool restart [project]` | Recreate and health-verify a stack |
+| `spool open [project]` | Open the live URL (`--print`, `--service`) |
 | `spool nuke <project>` | Destroy containers, volumes, clone, and state (aliases: `incinerate`, `remove`) |
 | `spool heal [project]` | Deterministic + LLM closed-loop repair (`--tries`) |
 | `spool explain [project]` | Dependency DAG, port map, repair provenance, required config |
 | `spool dash [project]` | Three-tab live dashboard |
 | `spool tunnel [project]` | Ephemeral public preview URL (`--port`) |
-| `spool status [project]` | Parsed container/health/port table |
+| `spool status [project]` | Container/health/port table; no arg lists projects (`list`) |
+| `spool stats [project]` | Live CPU, memory, network, and PID stats |
 | `spool logs [project] [service]` | Tail or stream logs (`-f`, `-n`) |
 | `spool env [project] [set KEY=VALUE \| unset KEY]` | List/required vars or edit overrides (auto-applies) |
-| `spool doctor` | Environment preflight |
+| `spool config [show\|path\|set <key> <value>]` | Inspect or edit global configuration |
+| `spool doctor` | Environment preflight (non-zero exit on critical failures) |
+| `spool completion [bash\|zsh\|fish]` | Shell completion scripts |
 
 Global flags: `--verbose/-v`, `--quiet/-q`, `--no-color`, `--yes`.
 
 In `spool chat`, mutating tools prompt for confirmation unless `--yes` is set.
 Slash commands: `/status`, `/explain`, `/heal`, `/tunnel`, `/nuke`,
 `/nuke-confirm`, `/clear`, `/help`.
+
+See [docs/DEMO.md](docs/DEMO.md) for a complete from-scratch judge demo runbook.
 
 ---
 
@@ -199,11 +210,14 @@ spool --yes ask "nuke certify-v2"
 
 ```bash
 make fmt
-make vet
-make test
-make race
+make check      # gofmt check + vet + tests + race
+make e2e        # full no-Docker init pipeline test
 make build
 ```
+
+CI runs `gofmt`, `go vet`, `go test -race`, and a build on every push. Tagged
+releases (`v*`) are built with GoReleaser for linux/darwin/windows on amd64 and
+arm64 (see `.github/workflows/` and `.goreleaser.yaml`).
 
 State lives under `~/.spool/`:
 
