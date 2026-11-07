@@ -3,10 +3,13 @@ package cmd
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/monojitgoswami69/spool/internal/config"
 	"github.com/monojitgoswami69/spool/internal/domain"
+	"github.com/monojitgoswami69/spool/internal/web"
 )
 
 func TestResolveSourceLocal(t *testing.T) {
@@ -83,4 +86,25 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestWebLocalCommandsAndConfig(t *testing.T) {
+	t.Setenv("SPOOL_HOME", t.TempDir())
+	b := &localWebBackend{}
+	for _, text := range []string{"/projects", "/doctor", "/version", "/config", "/setup", "/help"} {
+		handled, out := b.localCommand(context.Background(), web.ChatRequest{}, text)
+		if !handled || strings.TrimSpace(out) == "" {
+			t.Errorf("%s handled=%v out=%q", text, handled, out)
+		}
+	}
+	if err := applyWebConfig("provider", "openai"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.LoadOptional()
+	if cfg.LLMProvider != "openai" {
+		t.Fatalf("provider = %q", cfg.LLMProvider)
+	}
+	if err := applyWebConfig("nope", "x"); err == nil {
+		t.Fatal("expected unknown key error")
+	}
 }

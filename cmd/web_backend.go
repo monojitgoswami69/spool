@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/monojitgoswami69/spool/internal/agent"
@@ -140,9 +141,21 @@ func (b *localWebBackend) Send(ctx context.Context, req web.ChatRequest, emit fu
 }
 
 func (b *localWebBackend) localCommand(ctx context.Context, req web.ChatRequest, text string) (bool, string) {
-	switch strings.ToLower(strings.TrimSpace(text)) {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return false, ""
+	}
+	cmd := strings.ToLower(fields[0])
+	rest := strings.TrimSpace(text[len(fields[0]):])
+	switch cmd {
 	case "/help":
 		return true, agent.HelpText() + "\n\n**Slash commands**\n" + slashHelp()
+	case "/version":
+		return true, "Spool " + Version
+	case "/setup":
+		return true, "Run `spool setup` in your terminal to enter provider keys securely (masked input)."
+	case "/doctor":
+		return true, b.doctorSummary(ctx)
 	case "/projects":
 		projects, err := b.Projects(ctx)
 		if err != nil {
@@ -161,6 +174,16 @@ func (b *localWebBackend) localCommand(ctx context.Context, req web.ChatRequest,
 		}
 		return true, strings.TrimRight(bld.String(), "\n")
 	case "/config":
+		if strings.HasPrefix(strings.ToLower(rest), "set ") {
+			parts := strings.Fields(strings.TrimSpace(rest[4:]))
+			if len(parts) < 2 {
+				return true, "Usage: `/config set <provider|model|api-key|base-url|github-pat> <value>`"
+			}
+			if err := applyWebConfig(parts[0], strings.Join(parts[1:], " ")); err != nil {
+				return true, "Error: " + err.Error()
+			}
+			return true, fmt.Sprintf("Set `%s`. Run `/doctor` to verify.", parts[0])
+		}
 		cfg, err := b.Config(ctx)
 		if err != nil {
 			return true, "Error: " + err.Error()
@@ -171,11 +194,10 @@ func (b *localWebBackend) localCommand(ctx context.Context, req web.ChatRequest,
 		}
 		return true, fmt.Sprintf("**Configuration**\n\n- Provider/model: `%s/%s`\n- API key: %s\n- Source: `%s`\n- Home: `%s`", cfg.Provider, cfg.Model, key, cfg.Source, cfg.Home)
 	case "/open":
-		mgr, lock, err := resolveProject(req.Project)
+		_, lock, err := resolveProject(req.Project)
 		if err != nil {
 			return true, "No project selected."
 		}
-		_ = mgr
 		urls := urlStrings(lock)
 		if len(urls) == 0 {
 			return true, "No live endpoints for " + lock.Project + "."
@@ -192,6 +214,51 @@ func (b *localWebBackend) localCommand(ctx context.Context, req web.ChatRequest,
 		return true, "Use the **New chat** button."
 	}
 	return false, ""
+}
+
+func (b *localWebBackend) doctorSummary(ctx context.Context) string {
+	dockerBin := docker.Available()
+	daemon := docker.DaemonRunning(ctx)
+	compose := exec.CommandContext(ctx, "docker", "compose", "version").Run() == nil
+	cfg, _ := b.Config(ctx)
+	key := "missing"
+	if cfg.KeyConfigured {
+		key = "configured"
+	}
+	var bld strings.Builder
+	bld.WriteString("**Doctor**\n\n")
+	fmt.Fprintf(&bld, "- docker: %s\n", yesno(dockerBin))
+	fmt.Fprintf(&bld, "- docker daemon: %s\n", yesno(daemon))
+	fmt.Fprintf(&bld, "- compose v2: %s\n", yesno(compose))
+	fmt.Fprintf(&bld, "- llm: `%s/%s` (%s)\n", cfg.Provider, cfg.Model, key)
+	fmt.Fprintf(&bld, "- spool home: `%s`\n", cfg.Home)
+	return strings.TrimRight(bld.String(), "\n")
+}
+
+func yesno(ok bool) string {
+	if ok {
+		return "ok"
+	}
+	return "missing"
+}
+
+func applyWebConfig(key, value string) error {
+	cfg := config.LoadOptional()
+	switch strings.ToLower(key) {
+	case "provider":
+		cfg.LLMProvider = value
+	case "model":
+		cfg.LLMModel = value
+	case "api-key", "api_key", "apikey":
+		cfg.LLMAPIKey = value
+	case "base-url", "base_url", "baseurl":
+		cfg.LLMBaseURL = value
+	case "github-pat", "github_pat", "pat":
+		cfg.GitHubPAT = value
+	default:
+		return fmt.Errorf("unknown config key %q", key)
+	}
+	return config.Save(cfg)
 }
 
 func translateSlash(text string) string {
@@ -260,6 +327,7 @@ func slashHelp() string {
 		"`/env` `/env set KEY=VALUE` `/env unset KEY`",
 		"`/heal` `/up` `/down` `/restart` `/nuke`",
 		"`/tunnel [port]` `/onboard <url-or-path>` `/scan <path-or-url>`",
-		"`/projects` `/config` `/open` `/help`",
+		"`/projects` `/config` `/config set KEY VALUE` `/open` `/help`",
+		"`/doctor` `/version` `/setup`",
 	}, "\n")
 }
