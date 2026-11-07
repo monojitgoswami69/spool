@@ -38,7 +38,10 @@ func New(backend Backend, store *ChatStore) *Server {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err == nil {
 		fileServer := http.FileServer(http.FS(sub))
-		s.mux.Handle("/assets/", http.StripPrefix("/assets/", fileServer))
+		s.mux.Handle("/assets/", http.StripPrefix("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			fileServer.ServeHTTP(w, r)
+		})))
 	}
 	s.mux.HandleFunc("/", s.handleIndex)
 	return s

@@ -14,6 +14,7 @@ const state = {
   nerdOpen: false,
   nerdMessage: null,
   pending: null,
+  queued: null,
   slashIndex: -1,
 };
 
@@ -564,6 +565,11 @@ async function send(rawText, opts = {}) {
     els.send.disabled = false;
     setStatus('');
     renderThread();
+    if (state.queued) {
+      const queued = state.queued;
+      state.queued = null;
+      setTimeout(() => send(queued.text, { confirm: true, retry: true, appendUser: false }), 0);
+    }
   }
 }
 
@@ -701,6 +707,12 @@ function confirmPending() {
   const pending = state.pending;
   hideModal();
   if (!pending) return;
+  if (state.streaming) {
+    // The confirmation can be clicked while the current turn is still finalizing.
+    state.queued = pending;
+    toast('Executing after the current turn…');
+    return;
+  }
   send(pending.text, { confirm: true, retry: true, appendUser: false });
 }
 

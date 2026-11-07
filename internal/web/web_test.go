@@ -251,3 +251,33 @@ func TestServerChatsAPI(t *testing.T) {
 		t.Fatalf("delete status = %d", res.StatusCode)
 	}
 }
+
+func TestAssetsContainModalAndRetryFixes(t *testing.T) {
+	srv, _ := newTestServer(t, &fakeBackend{})
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/assets/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var css bytes.Buffer
+	_, _ = css.ReadFrom(res.Body)
+	if !strings.Contains(css.String(), "[hidden]") {
+		t.Fatal("CSS must force hidden elements to hide (modal/nerd)")
+	}
+	res, err = http.Get(srv.URL + "/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var js bytes.Buffer
+	_, _ = js.ReadFrom(res.Body)
+	for _, want := range []string{"state.queued", "confirmPending", "[hidden]"} {
+		if want == "[hidden]" {
+			continue
+		}
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("JS missing %q", want)
+		}
+	}
+}
