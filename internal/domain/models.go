@@ -123,6 +123,10 @@ type Service struct {
 	DockerfilePath        string            `json:"dockerfile_path,omitempty"`
 	Dependencies          []string          `json:"dependencies,omitempty"`
 	WorkspaceMember       bool              `json:"workspace_member,omitempty"`
+	// ExistingDockerfile is a repo-relative Dockerfile found in the source.
+	ExistingDockerfile string `json:"existing_dockerfile,omitempty"`
+	// BuildContext is the repo-relative context for ExistingDockerfile.
+	BuildContext string `json:"build_context,omitempty"`
 }
 
 // HasDependency reports whether the service declares a dependency (case-insensitive).
@@ -170,6 +174,17 @@ type EnvVar struct {
 	Description string       `json:"description,omitempty"`
 }
 
+// RepoIntel is source-repository intelligence the agent can use before
+// deciding whether to reuse existing Docker assets or generate new ones.
+type RepoIntel struct {
+	Readme       string            `json:"readme,omitempty"`
+	Docs         []string          `json:"docs,omitempty"`
+	Makefile     string            `json:"makefile,omitempty"`
+	Dockerfiles  []string          `json:"dockerfiles,omitempty"`
+	ComposeFiles []string          `json:"compose_files,omitempty"`
+	Scripts      map[string]string `json:"scripts,omitempty"`
+}
+
 // Project is the unit of orchestration.
 type Project struct {
 	ID            string          `json:"id"`
@@ -180,6 +195,7 @@ type Project struct {
 	Services      []*Service      `json:"services"`
 	InfraServices []*InfraService `json:"infra_services"`
 	Env           []*EnvVar       `json:"env,omitempty"`
+	Intel         RepoIntel       `json:"intel,omitempty"`
 	NetworkName   string          `json:"network_name,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
@@ -235,6 +251,7 @@ type Lock struct {
 	Infra         []*InfraService `json:"infra,omitempty"`
 	PortMap       map[string]int  `json:"port_map,omitempty"`
 	Env           []*EnvVar       `json:"env,omitempty"`
+	Intel         RepoIntel       `json:"intel,omitempty"`
 	NetworkName   string          `json:"network_name,omitempty"`
 	DetectionHash string          `json:"detection_hash"`
 	LastInit      time.Time       `json:"last_init"`

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Spool</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">◈</span>
+        <span class="brand-name">Spool</span>
+        <span class="brand-ver">0.4</span>
+      </div>
+
+      <button class="new-chat" id="new-chat" type="button">
+        <span aria-hidden="true">＋</span> New chat
+      </button>
+
+      <div class="side-section">
+        <div class="side-label">Chats</div>
+        <nav id="chat-list" class="chat-list" aria-label="Chats"></nav>
+      </div>
+
+      <div class="side-foot">
+        <label class="field-label" for="project-select">Project</label>
+        <select id="project-select" class="project-select"></select>
+        <div id="project-meta" class="project-meta"></div>
+        <button class="ghost wide" id="nerd-toggle" type="button">Nerd stats</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <span id="chat-title">New chat</span>
+          <span id="project-chip" class="chip hidden"></span>
+        </div>
+        <div class="topbar-actions">
+          <span id="model-chip" class="chip muted">agent</span>
+          <button class="ghost" id="help-btn" type="button">/ help</button>
+        </div>
+      </header>
+
+      <section class="thread" id="thread" aria-live="polite">
+        <div class="empty" id="empty">
+          <div class="empty-mark" aria-hidden="true">◈</div>
+          <h1>What should we ship?</h1>
+          <p>Spool is an agent with real tools. Ask it to onboard a repository, diagnose a failure, heal a build, or explain a topology.</p>
+          <div class="prompts">
+            <button type="button" data-prompt="status">status</button>
+            <button type="button" data-prompt="why did it fail?">diagnose</button>
+            <button type="button" data-prompt="explain the topology">explain</button>
+            <button type="button" data-prompt="/onboard https://github.com/">onboard a repo</button>
+          </div>
+        </div>
+      </section>
+
+      <footer class="composer">
+        <div class="composer-inner">
+          <div class="slash-menu" id="slash-menu" hidden></div>
+          <textarea id="input" rows="1" placeholder="Ask Spool anything — or type / for commands" aria-label="Message"></textarea>
+          <button id="send" class="send" type="button" aria-label="Send">↑</button>
+        </div>
+        <div class="composer-meta">
+          <span>Enter to send · Shift+Enter for newline · /help for commands</span>
+          <span id="status-line" class="status-line" aria-live="polite"></span>
+        </div>
+      </footer>
+    </main>
+
+    <aside class="nerd" id="nerd" hidden>
+      <div class="nerd-head">
+        <span>Nerd stats</span>
+        <button class="ghost" id="nerd-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="nerd-body" id="nerd-body"></div>
+    </aside>
+  </div>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h2 id="modal-title">Confirmation required</h2>
+      <p id="modal-text"></p>
+      <pre id="modal-args"></pre>
+      <div class="modal-actions">
+        <button class="ghost" id="modal-cancel" type="button">Cancel</button>
+        <button class="danger" id="modal-confirm" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

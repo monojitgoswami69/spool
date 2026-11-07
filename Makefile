@@ -1,6 +1,6 @@
 BINARY      := spool
 MODULE      := github.com/monojitgoswami69/spool
-VERSION     ?= v0.3.0
+VERSION     ?= v0.4.0
 BUILD_TIME  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS     := -s -w -X $(MODULE)/cmd.Version=$(VERSION) -X $(MODULE)/cmd.BuildTime=$(BUILD_TIME)
 
@@ -29,7 +29,7 @@ fmt-check: ## Fail if any Go file is not formatted
 check: fmt-check vet test race ## Run the full verification suite
 
 e2e: ## Run the no-Docker end-to-end pipeline tests
-	go test ./cmd -run 'TestInitPipelineNoRunE2E|TestUpdatePreservesHostPortsE2E' -v
+	go test ./cmd -run 'TestInitPipelineNoRunE2E|TestUpdatePreservesHostPortsE2E|TestAskOnboardNoRunE2E' -v
 
 heal-proof: ## Live proof: LLM repairs a runtime failure and a build failure
 	bash scripts/live-heal-test.sh

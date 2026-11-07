@@ -668,6 +668,7 @@ func (h *Healer) relevantFiles(svcName string) []FileEntry {
 		"go.mod", "Cargo.toml", "tsconfig.json", "next.config.js", "next.config.mjs", "next.config.ts",
 		"vite.config.ts", "vite.config.js", "pnpm-workspace.yaml",
 		".env.example", ".env.sample", ".env.template",
+		"README.md", "README", "docs/README.md",
 		"main.py", "app.py", "server.py", "run.py", "wsgi.py", "asgi.py",
 		"index.js", "server.js", "app.js", "main.js", "index.ts", "server.ts", "app.ts", "main.ts"}
 	candidates := append([]string{}, base...)

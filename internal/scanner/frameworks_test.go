@@ -393,3 +393,63 @@ func TestNodeSQLiteForcesNode24(t *testing.T) {
 		t.Fatalf("runtime = %q want 24", svcs[0].RuntimeVersion)
 	}
 }
+
+func TestRepoIntelAndExistingDockerfile(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "README.md", "# Demo\nBuild locally.")
+	writeRaw(t, root, "docs/guide.md", "# Guide")
+	writeRaw(t, root, "Makefile", "build:\n\techo hi\n")
+	writeRaw(t, root, "docker-compose.yml", "services: {}\n")
+	writeRaw(t, root, "Dockerfile", "FROM node:22-alpine\nEXPOSE 3000\n")
+	writeRaw(t, root, "package.json", `{"name":"demo","dependencies":{"next":"16"},"scripts":{"build":"next build","start":"next start"}}`)
+
+	res, err := Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Intel.Readme, "Demo") {
+		t.Fatalf("readme not captured: %q", res.Intel.Readme)
+	}
+	if len(res.Intel.Docs) == 0 || res.Intel.Docs[0] != "docs/guide.md" {
+		t.Fatalf("docs = %#v", res.Intel.Docs)
+	}
+	if !strings.Contains(res.Intel.Makefile, "build:") {
+		t.Fatalf("makefile = %q", res.Intel.Makefile)
+	}
+	if len(res.Intel.ComposeFiles) == 0 {
+		t.Fatal("compose file not captured")
+	}
+	if res.Intel.Scripts["build"] != "next build" {
+		t.Fatalf("scripts = %#v", res.Intel.Scripts)
+	}
+	if len(res.Intel.Dockerfiles) == 0 || res.Intel.Dockerfiles[0] != "Dockerfile" {
+		t.Fatalf("dockerfiles = %#v", res.Intel.Dockerfiles)
+	}
+	svc := res.Services[0]
+	if svc.ExistingDockerfile != "Dockerfile" || svc.BuildContext != "." {
+		t.Fatalf("service dockerfile = %q ctx=%q", svc.ExistingDockerfile, svc.BuildContext)
+	}
+}
+
+func TestNestedExistingDockerfileContext(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root, "package.json", `{"name":"root","dependencies":{"next":"16"},"scripts":{"start":"next start"}}`)
+	writeRaw(t, root, "frontend/package.json", `{"name":"front","dependencies":{"next":"16"},"scripts":{"start":"next start"}}`)
+	writeRaw(t, root, "frontend/Dockerfile", "FROM node:22-alpine\nEXPOSE 3001\n")
+	res, err := Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var front *domain.Service
+	for _, s := range res.Services {
+		if s.Path == "frontend" {
+			front = s
+		}
+	}
+	if front == nil {
+		t.Fatalf("missing frontend: %+v", res.Services)
+	}
+	if front.ExistingDockerfile != "frontend/Dockerfile" || front.BuildContext != "frontend" {
+		t.Fatalf("frontend dockerfile=%q ctx=%q", front.ExistingDockerfile, front.BuildContext)
+	}
+}

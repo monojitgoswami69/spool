@@ -49,6 +49,9 @@ Spool  The api container is healthy but your web service cannot reach it:
 - **Modern Node support** — Node 22 default, auto-upgrades to Node 24 when `node:sqlite` is detected.
 - **Honest failure handling** — real error extraction, persisted failure records, manifest rollback, and actionable next steps.
 - **Agent console & interactive setup** — modern centered chat TUI, a `diagnose` tool, `spool setup` wizard, and interactive missing-env prompts.
+- **Web control plane** — `spool serve` opens a local, chat-first agent console with project-aware conversations, slash commands, confirmation modals, and nerd stats.
+- **Repo intelligence** — reads README/docs/Makefile and existing Dockerfiles, reuses them when viable, and auto-falls back to generated manifests if the existing build fails.
+- **Nerd stats** — full tool timeline with args, outputs, durations, bytes, intent confidence, and raw event JSON.
 - **Hermetic generated images** — multi-stage Dockerfiles with non-root-friendly runtimes and curl for health probes. **No unconditional PyTorch index**: `download.pytorch.org` is added only when `torch` is actually a dependency.
 - **Real health verification** — container state *and* HTTP readiness are checked; failures are never discarded or reported as success.
 - **Closed-loop healer** — deterministic fast rules first, then an invariant-guarded LLM repair that can only touch generated `Dockerfile.*` / `docker-compose.yml`, with a stale-context guard and SHA-256 provenance in `repairs.json`.
@@ -109,6 +112,7 @@ tunnel tooling.
 |---|---|
 | `spool init [path-or-url]` | Full pipeline: clone → scan → infer → generate → build → heal → verify |
 | `spool chat [project]` | Interactive, intent-aware agent REPL |
+| `spool serve` | Local web control plane (chat-first agent console + nerd stats) |
 | `spool ask [project] <request>` | One-shot intent-aware request (prints the parsed intent first) |
 | `spool up [project]` | Start a stack and wait for real health (`--build`, `--recreate`) |
 | `spool down [project]` | Stop a stack (`--volumes` removes volumes) |
@@ -190,8 +194,9 @@ core:
   (`status`, `diagnose`, `heal`, `env_set`, ...) with project/service
   validation. High-confidence intents execute tools directly; ambiguous ones
   ask one clarifying question; open-ended asks fall back to the LLM tool loop.
-- **Grounding** — the agent reads real logs, health probes, topology, env, and
-  jailed repo files. It restates the intent (`🎯`) before acting.
+- **Grounding** — the agent reads real logs, health probes, topology, env,
+  README/docs, existing Dockerfiles/compose, and jailed repo files. It restates
+  the intent (`🎯`) before acting, and prefers reusing viable Docker assets.
 - **Guardrails** — mutating tools require confirmation; destructive tools are
   explicitly marked; file access is jailed; patches are invariant-checked.
 - **Closed loop** — diagnose → deterministic fix → LLM repair → rebuild →
@@ -199,6 +204,9 @@ core:
 
 `spool chat` is a modern, centered, bottom-input agent console with streaming
 tool pills, spinner, confirmation boxes, markdown responses, and slash commands.
+`spool serve` adds the same agent in a local web control plane: chat-first,
+project sidebar, persisted conversations, slash commands for every operation,
+confirmation modals, and a nerd-stats drawer with full tool telemetry.
 
 `spool env` and `spool setup` are interactive: missing variables are prompted
 one-by-one (secrets masked), and the setup wizard verifies the LLM live.

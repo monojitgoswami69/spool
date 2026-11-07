@@ -18,6 +18,7 @@ type Output struct {
 	Files       map[string]string `json:"files"`
 	WorkDir     string            `json:"work_dir"`
 	ComposePath string            `json:"compose_path"`
+	Reused      bool              `json:"reused_dockerfiles"`
 }
 
 // Options tunes generation and is derived from the project when empty.
@@ -32,6 +33,8 @@ type Options struct {
 	// rather than the repository root.
 	ServiceContext bool
 	ContextRoot    string
+	// ReuseExisting prefers a source Dockerfile over generating one.
+	ReuseExisting bool
 }
 
 // Generate produces all manifests in memory.
@@ -60,43 +63,57 @@ func GenerateWithOptions(p *domain.Project, opts Options) (*Output, error) {
 	}
 
 	monorepo := opts.Monorepo
+	reused := false
 	for _, svc := range p.Services {
-		svcOpts := opts
-		if independentNodeContext(svc, monorepo) {
-			svcOpts.ServiceContext = true
-			svcOpts.ContextRoot = filepath.Join(opts.RepoRoot, filepath.FromSlash(svc.Path))
-		} else {
-			svcOpts.ServiceContext = false
-			svcOpts.ContextRoot = opts.RepoRoot
+		if opts.ReuseExisting && svc.ExistingDockerfile != "" {
+			if data, err := os.ReadFile(filepath.Join(opts.RepoRoot, filepath.FromSlash(svc.ExistingDockerfile))); err == nil && strings.TrimSpace(string(data)) != "" {
+				files["Dockerfile."+svc.Name] = strings.TrimRight(string(data), "\n") + "\n"
+				reused = true
+				continue
+			}
 		}
+		svcOpts := opts
+		root := serviceContextRoot(svc, opts.RepoRoot, monorepo, opts.ReuseExisting)
+		svcOpts.ServiceContext = root != opts.RepoRoot
+		svcOpts.ContextRoot = root
 		files["Dockerfile."+svc.Name] = GenerateDockerfile(svc, svcOpts)
 	}
 
-	compose, err := GenerateComposeFile(p, ".env")
+	compose, err := GenerateComposeFile(p, ".env", opts)
 	if err != nil {
 		return nil, err
 	}
 	files["docker-compose.yml"] = compose
-	files[".dockerignore"] = DockerignoreContent(excludedNodePaths(p, monorepo)...)
+	files[".dockerignore"] = DockerignoreContent(excludedServicePaths(p, monorepo, opts.ReuseExisting)...)
 
-	return &Output{Files: files, WorkDir: opts.WorkDir, ComposePath: filepath.Join(opts.WorkDir, "docker-compose.yml")}, nil
+	return &Output{Files: files, WorkDir: opts.WorkDir, ComposePath: filepath.Join(opts.WorkDir, "docker-compose.yml"), Reused: reused}, nil
 }
 
 // WriteOutputs generates manifests and writes them atomically inside workDir.
 // It also writes a .dockerignore to the repository root when one is absent and
 // points every service's DockerfilePath at the generated file.
 func WriteOutputs(p *domain.Project, workDir, repoRoot string) (*Output, error) {
+	return WriteOutputsOptions(p, workDir, repoRoot, Options{ReuseExisting: true})
+}
+
+// WriteOutputsOptions is WriteOutputs with explicit options.
+func WriteOutputsOptions(p *domain.Project, workDir, repoRoot string, opts Options) (*Output, error) {
 	if workDir == "" {
 		workDir = p.WorkDir
+	}
+	if opts.RepoRoot == "" {
+		opts.RepoRoot = repoRoot
+	}
+	if opts.WorkDir == "" {
+		opts.WorkDir = workDir
+	}
+	if !opts.Monorepo {
+		opts.Monorepo = detectMonorepo(repoRoot)
 	}
 	if err := safefs.EnsureDir(workDir, 0o755); err != nil {
 		return nil, domain.E(domain.KindIO, "generator.WriteOutputs", "create work dir", err)
 	}
-	out, err := GenerateWithOptions(p, Options{
-		RepoRoot: repoRoot,
-		WorkDir:  workDir,
-		Monorepo: detectMonorepo(repoRoot),
-	})
+	out, err := GenerateWithOptions(p, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +138,7 @@ func WriteOutputs(p *domain.Project, workDir, repoRoot string) (*Output, error) 
 	// block between the markers is rewritten.
 	if repoRoot != "" {
 		if repoJail, jerr := safefs.NewJail(repoRoot); jerr == nil {
-			_ = repoJail.WriteFile(".dockerignore", []byte(mergeDockerignore(readFileOrEmpty(repoRoot, ".dockerignore"), excludedNodePaths(p, detectMonorepo(repoRoot)))), 0o644)
+			_ = repoJail.WriteFile(".dockerignore", []byte(mergeDockerignore(readFileOrEmpty(repoRoot, ".dockerignore"), excludedServicePaths(p, detectMonorepo(repoRoot), opts.ReuseExisting))), 0o644)
 		}
 	}
 	return out, nil
@@ -226,26 +243,46 @@ func independentNodeContext(svc *domain.Service, monorepo bool) bool {
 	return true
 }
 
-func serviceContextRoot(svc *domain.Service, repoRoot string, monorepo bool) string {
+func serviceContextRoot(svc *domain.Service, repoRoot string, monorepo, reuseExisting bool) string {
+	if reuseExisting && svc != nil && svc.BuildContext != "" {
+		if svc.BuildContext == "." {
+			return repoRoot
+		}
+		return filepath.Join(repoRoot, filepath.FromSlash(svc.BuildContext))
+	}
 	if independentNodeContext(svc, monorepo) {
 		return filepath.Join(repoRoot, filepath.FromSlash(svc.Path))
 	}
 	return repoRoot
 }
 
-func excludedNodePaths(p *domain.Project, monorepo bool) []string {
-	if p == nil || monorepo {
+func usesOwnContext(svc *domain.Service, monorepo, reuseExisting bool) bool {
+	if svc == nil {
+		return false
+	}
+	if reuseExisting && svc.BuildContext != "" && svc.BuildContext != "." {
+		return true
+	}
+	return independentNodeContext(svc, monorepo)
+}
+
+func excludedServicePaths(p *domain.Project, monorepo, reuseExisting bool) []string {
+	if p == nil {
 		return nil
 	}
 	seen := map[string]bool{}
 	var out []string
 	for _, svc := range p.Services {
-		if !independentNodeContext(svc, monorepo) {
+		if !usesOwnContext(svc, monorepo, reuseExisting) {
 			continue
 		}
-		if svc.Path != "" && !seen[svc.Path] {
-			seen[svc.Path] = true
-			out = append(out, svc.Path)
+		path := svc.Path
+		if reuseExisting && svc.BuildContext != "" && svc.BuildContext != "." {
+			path = svc.BuildContext
+		}
+		if path != "" && path != "." && !seen[path] {
+			seen[path] = true
+			out = append(out, path)
 		}
 	}
 	sort.Strings(out)

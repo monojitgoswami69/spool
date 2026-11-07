@@ -81,6 +81,19 @@ use project certify-v2
 heal
 ```
 
+## Act 4.5 — Web control plane (60s)
+
+```bash
+spool serve
+```
+
+Open the printed URL. Show:
+- chat sidebar with persisted conversations
+- project selector with live running/healthy counts
+- streaming tool pills and intent chips
+- `/onboard <url>` with a confirmation modal
+- **Nerd stats** drawer: tool args, outputs, durations, bytes, raw events
+
 ## Act 5 — Show the engine room (60s)
 
 ```bash

@@ -179,3 +179,58 @@ func TestDockerOnlyManifest(t *testing.T) {
 		t.Fatalf("docker-only app must not get a curl healthcheck:\n%s", compose)
 	}
 }
+
+func TestReuseExistingDockerfile(t *testing.T) {
+	repo := t.TempDir()
+	work := t.TempDir()
+	content := "FROM node:22-alpine\nRUN echo EXISTING_MARKER\nEXPOSE 3000\n"
+	if err := os.WriteFile(filepath.Join(repo, "Dockerfile"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &domain.Project{
+		ID: "demo", SourcePath: repo, WorkDir: work,
+		Services: []*domain.Service{{
+			Name: "web", Path: ".", Language: domain.LangNode, Framework: domain.FrameworkNextJS,
+			Port: 3000, HostPort: 3000, ExistingDockerfile: "Dockerfile", BuildContext: ".",
+		}},
+	}
+	out, err := GenerateWithOptions(p, Options{RepoRoot: repo, WorkDir: work, ReuseExisting: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Reused || out.Files["Dockerfile.web"] != content {
+		t.Fatalf("existing Dockerfile not reused:\n%s", out.Files["Dockerfile.web"])
+	}
+	fresh, err := GenerateWithOptions(p, Options{RepoRoot: repo, WorkDir: work, ReuseExisting: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Reused || strings.Contains(fresh.Files["Dockerfile.web"], "EXISTING_MARKER") {
+		t.Fatalf("fresh generation should ignore existing Dockerfile:\n%s", fresh.Files["Dockerfile.web"])
+	}
+}
+
+func TestReusedNestedDockerfileUsesItsContext(t *testing.T) {
+	repo := t.TempDir()
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "frontend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "frontend", "Dockerfile"), []byte("FROM node:22-alpine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &domain.Project{
+		ID: "demo", SourcePath: repo, WorkDir: work,
+		Services: []*domain.Service{{
+			Name: "front", Path: "frontend", Language: domain.LangNode, Framework: domain.FrameworkNextJS,
+			Port: 3000, HostPort: 3000, ExistingDockerfile: "frontend/Dockerfile", BuildContext: "frontend",
+		}},
+	}
+	compose, err := GenerateComposeFile(p, ".env", Options{ReuseExisting: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(compose, "frontend") {
+		t.Fatalf("expected frontend context:\n%s", compose)
+	}
+}

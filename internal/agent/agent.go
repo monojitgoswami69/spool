@@ -42,13 +42,17 @@ func DefaultBudget() Budget {
 
 // Event is emitted for UI streaming.
 type Event struct {
-	Type    string         `json:"type"`
-	State   State          `json:"state,omitempty"`
-	Tool    string         `json:"tool,omitempty"`
-	Message string         `json:"message,omitempty"`
-	Args    map[string]any `json:"args,omitempty"`
-	Success bool           `json:"success,omitempty"`
-	Bytes   int            `json:"bytes,omitempty"`
+	Type        string         `json:"type"`
+	State       State          `json:"state,omitempty"`
+	Tool        string         `json:"tool,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	Args        map[string]any `json:"args,omitempty"`
+	Success     bool           `json:"success,omitempty"`
+	Bytes       int            `json:"bytes,omitempty"`
+	Time        time.Time      `json:"time,omitempty"`
+	Duration    time.Duration  `json:"duration,omitempty"`
+	Output      string         `json:"output,omitempty"`
+	Destructive bool           `json:"destructive,omitempty"`
 }
 
 // EnvAccess exposes project environment state to intent dispatch.
@@ -61,14 +65,15 @@ type EnvAccess interface {
 
 // OnboardResult is the outcome of an agent-driven repository onboarding.
 type OnboardResult struct {
-	Project     string   `json:"project"`
-	ProjectID   string   `json:"project_id"`
-	Services    []string `json:"services,omitempty"`
-	Infra       []string `json:"infra,omitempty"`
-	URLs        []string `json:"urls,omitempty"`
-	Missing     []string `json:"missing_env,omitempty"`
-	HealSummary string   `json:"heal_summary,omitempty"`
-	NoRun       bool     `json:"no_run,omitempty"`
+	Project           string   `json:"project"`
+	ProjectID         string   `json:"project_id"`
+	Services          []string `json:"services,omitempty"`
+	Infra             []string `json:"infra,omitempty"`
+	URLs              []string `json:"urls,omitempty"`
+	Missing           []string `json:"missing_env,omitempty"`
+	HealSummary       string   `json:"heal_summary,omitempty"`
+	NoRun             bool     `json:"no_run,omitempty"`
+	ReusedDockerfiles bool     `json:"reused_dockerfiles,omitempty"`
 }
 
 // OnboardFunc runs the end-to-end onboarding pipeline.
@@ -147,6 +152,9 @@ func (a *Agent) Close() error {
 }
 
 func (a *Agent) emit(e Event) {
+	if e.Time.IsZero() {
+		e.Time = time.Now().UTC()
+	}
 	e.State = a.state
 	a.events = append(a.events, e)
 	if a.opts.EventHandler != nil {
@@ -301,12 +309,13 @@ func (a *Agent) invoke(ctx context.Context, name string, args map[string]any) (s
 			approved = a.opts.Confirm(tool.Name, destructive, args)
 		}
 		if !approved {
-			a.emit(Event{Type: "permission_denied", Tool: tool.Name, Args: args, Message: "mutating tool denied"})
+			a.emit(Event{Type: "permission_denied", Tool: tool.Name, Args: args, Message: "mutating tool denied", Destructive: destructive})
 			return "", domain.E(domain.KindValidation, "agent.invoke", "permission denied for mutating tool "+tool.Name, nil)
 		}
 	}
 
 	a.emit(Event{Type: "tool_start", Tool: tool.Name, Args: args})
+	started := time.Now()
 	timeout := tool.Timeout
 	if timeout <= 0 {
 		timeout = 3 * time.Minute
@@ -315,7 +324,7 @@ func (a *Agent) invoke(ctx context.Context, name string, args map[string]any) (s
 	defer cancel()
 	out, err := tool.Handler(callCtx, args)
 	if err != nil {
-		a.emit(Event{Type: "tool_end", Tool: tool.Name, Args: args, Success: false, Message: err.Error()})
+		a.emit(Event{Type: "tool_end", Tool: tool.Name, Args: args, Success: false, Message: err.Error(), Duration: time.Since(started), Output: err.Error()})
 		return "", err
 	}
 
@@ -329,8 +338,16 @@ func (a *Agent) invoke(ctx context.Context, name string, args map[string]any) (s
 		out = out[:remaining] + "\n...byte budget truncated..."
 	}
 	a.bytes += len(out)
-	a.emit(Event{Type: "tool_end", Tool: tool.Name, Args: args, Success: true, Bytes: len(out), Message: summarize(out)})
+	a.emit(Event{Type: "tool_end", Tool: tool.Name, Args: args, Success: true, Bytes: len(out), Message: summarize(out), Duration: time.Since(started), Output: truncateEventOutput(out)})
 	return out, nil
+}
+
+func truncateEventOutput(s string) string {
+	const max = 8 * 1024
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n…truncated…"
 }
 
 func summarize(s string) string {
@@ -346,7 +363,9 @@ const SystemPrompt = `You are Spool, an autonomous infrastructure control-plane 
 Before acting, restate the user's intent in one sentence and identify the target project/service.
 If the request is ambiguous, ask exactly one clarifying question and do not act.
 You inspect repositories, infer backing services, synthesize container manifests, orchestrate
-stacks, diagnose failures, and heal them. Prefer concrete tools over speculation. Never claim a
+stacks, diagnose failures, and heal them. Prefer concrete tools over speculation. Before
+generating Docker assets, inspect the README, docs, existing Dockerfiles, and compose files:
+reuse or build on what the repo already provides when viable, and only regenerate when needed. Never claim a
 stack is healthy without checking. Only read files through read_repo_file (paths are jailed).
 Mutating and destructive tools may be denied; if denied, explain and continue safely.`
 

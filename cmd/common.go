@@ -64,6 +64,7 @@ func projectFor(mgr *state.Manager, lock *domain.Lock) *domain.Project {
 		Services:      lock.Services,
 		InfraServices: lock.Infra,
 		Env:           lock.Env,
+		Intel:         lock.Intel,
 		NetworkName:   lock.NetworkName,
 		CreatedAt:     lock.LastInit,
 		UpdatedAt:     lock.LastUp,

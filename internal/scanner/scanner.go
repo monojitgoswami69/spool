@@ -5,6 +5,7 @@ package scanner
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,7 @@ type Result struct {
 	Root      string            `json:"root"`
 	Services  []*domain.Service `json:"services"`
 	Languages []domain.Language `json:"languages"`
+	Intel     domain.RepoIntel  `json:"intel"`
 }
 
 var groupingDirs = map[string]bool{"services": true, "apps": true, "packages": true}
@@ -197,6 +199,9 @@ func Scan(root string) (*Result, error) {
 	normalizeNames(services)
 	ensureUniquePaths(services)
 
+	attachExistingDockerfiles(abs, services)
+	intel := collectIntel(abs, services)
+
 	langSeen := map[domain.Language]bool{}
 	var langs []domain.Language
 	for _, s := range services {
@@ -207,7 +212,7 @@ func Scan(root string) (*Result, error) {
 	}
 	sort.Slice(langs, func(i, j int) bool { return langs[i] < langs[j] })
 
-	return &Result{Root: abs, Services: services, Languages: langs}, nil
+	return &Result{Root: abs, Services: services, Languages: langs, Intel: intel}, nil
 }
 
 func normalizeNames(services []*domain.Service) {
@@ -298,4 +303,86 @@ func isHex8(s string) bool {
 		}
 	}
 	return true
+}
+
+func readLimited(path string, max int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, max))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func collectIntel(root string, services []*domain.Service) domain.RepoIntel {
+	intel := domain.RepoIntel{}
+	for _, name := range []string{"README.md", "README", "readme.md"} {
+		if p := filepath.Join(root, name); fsutil.Exists(p) {
+			intel.Readme = readLimited(p, 8*1024)
+			break
+		}
+	}
+	if p := filepath.Join(root, "Makefile"); fsutil.Exists(p) {
+		intel.Makefile = readLimited(p, 6*1024)
+	}
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		if fsutil.Exists(filepath.Join(root, name)) {
+			intel.ComposeFiles = append(intel.ComposeFiles, name)
+		}
+	}
+	if docs, err := os.ReadDir(filepath.Join(root, "docs")); err == nil {
+		var names []string
+		for _, d := range docs {
+			if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+				names = append(names, "docs/"+d.Name())
+			}
+		}
+		sort.Strings(names)
+		if len(names) > 20 {
+			names = names[:20]
+		}
+		intel.Docs = names
+	}
+	if pkg, err := node.ParsePackageJSON(root); err == nil && len(pkg.Scripts) > 0 {
+		intel.Scripts = pkg.Scripts
+	}
+	seen := map[string]bool{}
+	for _, svc := range services {
+		if svc.ExistingDockerfile != "" && !seen[svc.ExistingDockerfile] {
+			seen[svc.ExistingDockerfile] = true
+			intel.Dockerfiles = append(intel.Dockerfiles, svc.ExistingDockerfile)
+		}
+	}
+	sort.Strings(intel.Dockerfiles)
+	return intel
+}
+
+func attachExistingDockerfiles(root string, services []*domain.Service) {
+	for _, svc := range services {
+		dir := root
+		if svc.Path != "" && svc.Path != "." {
+			dir = filepath.Join(root, filepath.FromSlash(svc.Path))
+		}
+		candidates := []string{filepath.Join(dir, "Dockerfile"), filepath.Join(dir, "Dockerfile."+svc.Name)}
+		for _, c := range candidates {
+			if !fsutil.Exists(c) {
+				continue
+			}
+			rel, err := filepath.Rel(root, c)
+			if err != nil {
+				continue
+			}
+			svc.ExistingDockerfile = filepath.ToSlash(rel)
+			if svc.Path == "" || svc.Path == "." {
+				svc.BuildContext = "."
+			} else {
+				svc.BuildContext = svc.Path
+			}
+			break
+		}
+	}
 }

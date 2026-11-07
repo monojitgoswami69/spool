@@ -5,7 +5,7 @@ set -eu
 MODULE="github.com/monojitgoswami69/spool"
 REPO="https://github.com/monojitgoswami69/spool.git"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-VERSION="${VERSION:-v0.3.0}"
+VERSION="${VERSION:-v0.4.0}"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }

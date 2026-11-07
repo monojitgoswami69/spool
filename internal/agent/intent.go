@@ -618,6 +618,9 @@ func formatOnboard(out *OnboardResult) string {
 	if len(out.Infra) > 0 {
 		fmt.Fprintf(&b, "**Infrastructure**: %s\n", strings.Join(out.Infra, ", "))
 	}
+	if out.ReusedDockerfiles {
+		b.WriteString("**Build**: reused existing Dockerfile(s)\n")
+	}
 	if len(out.Missing) > 0 {
 		fmt.Fprintf(&b, "\n**Missing env**: `%s`\n", strings.Join(out.Missing, "`, `"))
 		fmt.Fprintf(&b, "Set them with `spool env %s set KEY=VALUE`.\n", out.ProjectID)
@@ -968,3 +971,6 @@ func atoiSafe(s string) int {
 	}
 	return n
 }
+
+// HelpText returns the agent's user-facing command capabilities.
+func HelpText() string { return helpText() }

@@ -106,6 +106,12 @@ func (a *Agent) registerDefaultTools() error {
 			Handler:  a.toolHealService,
 		},
 		{
+			Name:        "inspect_repository",
+			Description: "Return README excerpt, docs, Makefile, existing Dockerfiles/compose files, scripts, and detected services for the current project.",
+			Parameters:  objectSchema(map[string]any{}),
+			Handler:     a.toolInspectRepository,
+		},
+		{
 			Name:        "read_repo_file",
 			Description: "Read a file inside the repository. The path is strictly jailed to the repo root.",
 			Parameters: objectSchema(map[string]any{
@@ -165,20 +171,22 @@ func (a *Agent) toolScanRepository(ctx context.Context, args map[string]any) (st
 		return "", err
 	}
 	type svcView struct {
-		Name      string `json:"name"`
-		Path      string `json:"path"`
-		Language  string `json:"language"`
-		Framework string `json:"framework"`
-		Port      int    `json:"port"`
-		HostPort  int    `json:"host_port"`
-		IsWorker  bool   `json:"is_worker"`
-		Manager   string `json:"package_manager"`
+		Name               string `json:"name"`
+		Path               string `json:"path"`
+		Language           string `json:"language"`
+		Framework          string `json:"framework"`
+		Port               int    `json:"port"`
+		HostPort           int    `json:"host_port"`
+		IsWorker           bool   `json:"is_worker"`
+		Manager            string `json:"package_manager"`
+		ExistingDockerfile string `json:"existing_dockerfile,omitempty"`
+		BuildContext       string `json:"build_context,omitempty"`
 	}
 	views := make([]svcView, 0, len(res.Services))
 	for _, s := range res.Services {
-		views = append(views, svcView{s.Name, s.Path, string(s.Language), string(s.Framework), s.Port, s.HostPort, s.IsWorker, string(s.PackageManager)})
+		views = append(views, svcView{s.Name, s.Path, string(s.Language), string(s.Framework), s.Port, s.HostPort, s.IsWorker, string(s.PackageManager), s.ExistingDockerfile, s.BuildContext})
 	}
-	payload := map[string]any{"root": res.Root, "languages": res.Languages, "services": views}
+	payload := map[string]any{"root": res.Root, "languages": res.Languages, "services": views, "intel": res.Intel}
 	b, _ := json.MarshalIndent(payload, "", "  ")
 	return string(b), nil
 }
@@ -316,6 +324,21 @@ func (a *Agent) toolHealService(ctx context.Context, args map[string]any) (strin
 		return "", err
 	}
 	b, _ := json.MarshalIndent(res, "", "  ")
+	return string(b), nil
+}
+
+func (a *Agent) toolInspectRepository(ctx context.Context, args map[string]any) (string, error) {
+	if a.opts.Project == nil {
+		return "", fmt.Errorf("no project is loaded")
+	}
+	payload := map[string]any{
+		"project":    a.opts.Project.Name,
+		"project_id": a.opts.Project.ID,
+		"services":   a.opts.Project.Services,
+		"infra":      a.opts.Project.InfraServices,
+		"intel":      a.opts.Project.Intel,
+	}
+	b, _ := json.MarshalIndent(payload, "", "  ")
 	return string(b), nil
 }
 

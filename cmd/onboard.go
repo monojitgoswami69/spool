@@ -43,6 +43,8 @@ type onboardResult struct {
 	InfraDescs   []string
 	Elapsed      time.Duration
 	NoRun        bool
+	Reused       bool
+	Intel        domain.RepoIntel
 }
 
 // runOnboarding is the shared end-to-end pipeline used by `spool init` and the
@@ -96,10 +98,16 @@ func runOnboarding(ctx context.Context, o onboardOptions) (*onboardResult, error
 	if err != nil {
 		return nil, err
 	}
+	if len(res.Intel.Dockerfiles) > 0 {
+		logf("%s", ui.InfoLine("found existing Dockerfile(s): "+strings.Join(res.Intel.Dockerfiles, ", ")))
+	}
+	if len(res.Intel.ComposeFiles) > 0 {
+		logf("%s", ui.InfoLine("found existing compose file(s): "+strings.Join(res.Intel.ComposeFiles, ", ")+" (Spool generates a managed compose)"))
+	}
 	project := &domain.Project{
 		ID: id, Name: projectName, SourcePath: sourcePath, IsLocal: isLocal,
 		WorkDir: mgr.Dir, Services: services, NetworkName: id + "-net",
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Intel: res.Intel, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	project.Env = envvar.DiscoverEnvVars(sourcePath)
 	sourceEnv := loadSourceEnv(sourcePath, services)
@@ -125,7 +133,7 @@ func runOnboarding(ctx context.Context, o onboardOptions) (*onboardResult, error
 	lock := &domain.Lock{
 		Version: Version, Project: projectName, ProjectID: id, RepoURL: repoURL,
 		RepoPath: sourcePath, WorkDir: mgr.Dir, Services: project.Services, Infra: infras,
-		PortMap: portMap(project.Services), Env: project.Env, NetworkName: project.NetworkName,
+		PortMap: portMap(project.Services), Env: project.Env, Intel: project.Intel, NetworkName: project.NetworkName,
 		DetectionHash: state.HashDetection(project.Services), LastInit: time.Now(),
 	}
 	out, err := generator.WriteOutputs(project, mgr.Dir, sourcePath)
@@ -133,6 +141,9 @@ func runOnboarding(ctx context.Context, o onboardOptions) (*onboardResult, error
 		return nil, err
 	}
 	logf("%s", ui.SuccessLine(fmt.Sprintf("%d manifest(s) in %s", len(out.Files), mgr.Dir)))
+	if out.Reused {
+		logf("%s", ui.InfoLine("reusing existing Dockerfile(s) where available"))
+	}
 
 	// 6. Persist env/state.
 	progress(6, 8, "Writing environment and state")
@@ -162,7 +173,7 @@ func runOnboarding(ctx context.Context, o onboardOptions) (*onboardResult, error
 		Manager: mgr, Project: project, Lock: lock, Output: out,
 		Missing: missingEnvKeys(mgr, lock), URLs: urlStrings(lock),
 		ServiceNames: names, InfraDescs: describeInfraList(infras), Elapsed: time.Since(start),
-		NoRun: o.NoRun,
+		NoRun: o.NoRun, Reused: out.Reused, Intel: res.Intel,
 	}
 
 	if o.NoRun {
@@ -184,13 +195,32 @@ func runOnboarding(ctx context.Context, o onboardOptions) (*onboardResult, error
 			logf("%s", ui.WarningLine("LLM unavailable ("+lerr.Error()+"); using deterministic repairs only"))
 		}
 	}
-	h, err := healerFor(mgr, lock, client)
-	if err != nil {
-		return result, err
+	healOnce := func() (*healer.Result, error) {
+		h, err := healerFor(mgr, lock, client)
+		if err != nil {
+			return nil, err
+		}
+		h.MaxTries = 3
+		return h.Heal(ctx, "", "")
 	}
-	h.MaxTries = 3
-	healRes, herr := h.Heal(ctx, "", "")
+	healRes, herr := healOnce()
 	result.Heal = healRes
+	if herr != nil && out.Reused {
+		logf("%s", ui.WarningLine("existing Dockerfile(s) did not build; regenerating managed Dockerfiles and retrying"))
+		fresh, ferr := generator.WriteOutputsOptions(project, mgr.Dir, sourcePath, generator.Options{
+			RepoRoot: sourcePath, WorkDir: mgr.Dir, ReuseExisting: false,
+		})
+		if ferr != nil {
+			writeFailureRecord(mgr, healRes)
+			return result, ferr
+		}
+		out = fresh
+		result.Output = out
+		result.Reused = false
+		healRes, herr = healOnce()
+		result.Heal = healRes
+	}
+	result.Reused = out.Reused
 	if herr != nil {
 		writeFailureRecord(mgr, healRes)
 		result.Missing = missingEnvKeys(mgr, lock)
@@ -239,7 +269,7 @@ func onboardForAgent(ctx context.Context, target string, maxServices int, noRun 
 	out := &agent.OnboardResult{
 		Project: res.Project.Name, ProjectID: res.Manager.ID,
 		Services: res.ServiceNames, Infra: res.InfraDescs,
-		URLs: res.URLs, Missing: res.Missing, NoRun: res.NoRun,
+		URLs: res.URLs, Missing: res.Missing, NoRun: res.NoRun, ReusedDockerfiles: res.Reused,
 	}
 	if res.Heal != nil {
 		out.HealSummary = res.Heal.Summary

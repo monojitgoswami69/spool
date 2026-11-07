@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.4.0
+
+### Web control plane
+- `spool serve`: local chat-first web UI with project sidebar, persisted chats
+  in `~/.spool/chats`, streaming SSE agent events, slash commands for all
+  operations, confirmation modals, and a nerd-stats drawer.
+- Nerd stats: intent, tool calls, args, outputs, durations, bytes, raw events.
+
+### Agent-first repo intelligence
+- Scanner collects README, docs, Makefile, scripts, existing Dockerfiles and
+  compose files; exposes them through `inspect_repository`.
+- Existing Dockerfiles are reused by default; if the reused build fails, Spool
+  regenerates managed Dockerfiles and retries automatically.
+- Agent system prompt now explicitly prefers inspecting/reusing repo assets.
+
+### Bulletproofing
+- Strict compose validation, rollback of failed patches, source-error detection,
+  real BuildKit error extraction, and fast crash-loop failure.
+- Node 22 default / Node 24 for `node:sqlite`; Dockerfile-only and static repos;
+  nested-app safe build contexts.
+
+
 ## v0.3.0
 
 ### Agent-first

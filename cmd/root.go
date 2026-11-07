@@ -13,7 +13,7 @@ import (
 
 // Version and BuildTime are injected via -ldflags.
 var (
-	Version   = "v0.3.0"
+	Version   = "v0.4.0"
 	BuildTime = "dev"
 )
 

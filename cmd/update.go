@@ -69,7 +69,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	logf("%s", ui.Step(2, 5, "Refreshing environment and infrastructure"))
 	project := &domain.Project{
 		ID: lock.ProjectID, Name: lock.Project, SourcePath: lock.RepoPath, WorkDir: mgr.Dir,
-		Services: services, NetworkName: lock.NetworkName,
+		Services: services, Intel: res.Intel, NetworkName: lock.NetworkName,
 	}
 	if project.NetworkName == "" {
 		project.NetworkName = lock.ProjectID + "-net"
@@ -95,6 +95,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	lock.Infra = infras
 	lock.PortMap = portMap(project.Services)
 	lock.Env = project.Env
+	lock.Intel = project.Intel
 	lock.NetworkName = project.NetworkName
 	lock.DetectionHash = state.HashDetection(project.Services)
 	if _, err := generator.WriteOutputs(project, mgr.Dir, lock.RepoPath); err != nil {

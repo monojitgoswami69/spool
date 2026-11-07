@@ -59,9 +59,13 @@ type composeService struct {
 // GenerateComposeFile renders a portable compose file. build.context and
 // build.dockerfile are relative to the compose file, so the workspace is
 // relocatable.
-func GenerateComposeFile(p *domain.Project, envFile string) (string, error) {
+func GenerateComposeFile(p *domain.Project, envFile string, opts ...Options) (string, error) {
 	if p == nil {
 		return "", domain.E(domain.KindValidation, "generator.GenerateComposeFile", "nil project", nil)
+	}
+	reuseExisting := true
+	if len(opts) > 0 {
+		reuseExisting = opts[0].ReuseExisting
 	}
 	network := p.NetworkName
 	if network == "" {
@@ -113,7 +117,7 @@ func GenerateComposeFile(p *domain.Project, envFile string) (string, error) {
 
 	monorepo := detectMonorepo(p.SourcePath)
 	for _, app := range p.Services {
-		contextRoot := serviceContextRoot(app, p.SourcePath, monorepo)
+		contextRoot := serviceContextRoot(app, p.SourcePath, monorepo, reuseExisting)
 		context := relFromWorkDir(p.WorkDir, contextRoot)
 		dockerfilePath := filepath.Join(p.WorkDir, "Dockerfile."+app.Name)
 		dockerfile := relFromWorkDir(contextRoot, dockerfilePath)
