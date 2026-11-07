@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -77,8 +78,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	logf("")
+	waitForHealthy(ctx, res.Manager, res.Lock, 60*time.Second)
 	showStatus(ctx, res.Manager, res.Lock)
-	printURLs(res.Lock)
+	printURLs(ctx, res.Manager, res.Lock)
 	logf("")
 	logf("%s", ui.InfoLine(fmt.Sprintf("project %s · state %s", res.Manager.ID, res.Manager.Dir)))
 	return nil

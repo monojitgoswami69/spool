@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,14 @@ import (
 
 // DefaultMaxTries is the default repair budget.
 const DefaultMaxTries = 3
+
+var (
+	// buildkitStepRe matches BuildKit progress headers: "#12 [stage 2/4] RUN …"
+	// (an optional elapsed timestamp may sit between the id and the bracket).
+	buildkitStepRe = regexp.MustCompile(`^#[0-9]+(?:\s+[\d.]+)?\s+\[([^\]]+)\]\s*(.*)$`)
+	// legacyStepRe matches the classic builder: "Step 2/12 : RUN …".
+	legacyStepRe = regexp.MustCompile(`^Step (\d+)/(\d+)\s*:\s*(.*)$`)
+)
 
 // Healer repairs a generated stack.
 type Healer struct {
@@ -140,7 +149,7 @@ func (h *Healer) Heal(ctx context.Context, initialOutput, failingService string)
 			lastOutput = initialOutput
 			buildErr = errors.New("initial build failure")
 		} else {
-			lastOutput, buildErr = h.Compose.Build(ctx, "")
+			lastOutput, buildErr = h.build(ctx)
 		}
 
 		if buildErr == nil {
@@ -204,7 +213,7 @@ func (h *Healer) Heal(ctx context.Context, initialOutput, failingService string)
 	}
 
 	// Final verification attempt.
-	lastOutput, err := h.Compose.Build(ctx, "")
+	lastOutput, err := h.build(ctx)
 	if err == nil {
 		if verr := h.VerifyRuntime(ctx); verr == nil {
 			res.Success = true
@@ -325,12 +334,66 @@ func (h *Healer) runtimeLog(ctx context.Context, svcName string) string {
 	return out
 }
 
+// build runs compose build, forwarding live step lines to the healer log when
+// the underlying controller supports streaming.
+func (h *Healer) build(ctx context.Context) (string, error) {
+	if h.Compose == nil {
+		return "", domain.E(domain.KindDocker, "healer.build", "nil compose controller", nil)
+	}
+	type streamer interface {
+		BuildProgress(ctx context.Context, service string, onLine func(string)) (string, error)
+	}
+	if bs, ok := h.Compose.(streamer); ok {
+		last := ""
+		return bs.BuildProgress(ctx, "", func(line string) {
+			step := buildStepLine(line)
+			if step == "" || step == last {
+				return
+			}
+			last = step
+			h.logf("  ▸ %s", step)
+		})
+	}
+	return h.Compose.Build(ctx, "")
+}
+
+// buildStepLine extracts a human-readable progress line from docker build
+// output. It recognizes BuildKit step headers ("#12 [stage 2/4] RUN …") and
+// legacy builder lines ("Step 2/12 : RUN …"); everything else is noise.
+func buildStepLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.Contains(trimmed, "CACHED") {
+		return ""
+	}
+	if m := buildkitStepRe.FindStringSubmatch(trimmed); m != nil {
+		stage := strings.TrimSpace(m[1])
+		cmd := strings.TrimSpace(m[2])
+		if cmd == "" {
+			return stage
+		}
+		out := stage + " · " + cmd
+		if len(out) > 90 {
+			out = out[:87] + "…"
+		}
+		return out
+	}
+	if m := legacyStepRe.FindStringSubmatch(trimmed); m != nil {
+		out := "step " + m[1] + "/" + m[2] + " · " + strings.TrimSpace(m[3])
+		if len(out) > 90 {
+			out = out[:87] + "…"
+		}
+		return out
+	}
+	return ""
+}
+
 // VerifyRuntime brings the stack up and verifies container + HTTP health. It
 // never discards health results.
 func (h *Healer) VerifyRuntime(ctx context.Context) error {
 	if h.Compose == nil {
 		return domain.E(domain.KindDocker, "healer.VerifyRuntime", "nil compose", nil)
 	}
+	h.logf("▸ starting stack (compose up -d)")
 	if _, err := h.Compose.Up(ctx, "--remove-orphans"); err != nil {
 		return err
 	}
@@ -349,10 +412,27 @@ func (h *Healer) VerifyRuntime(ctx context.Context) error {
 	}
 	var last string
 	var restartingSince time.Time
+	containerLast := map[string]string{}
+	httpLast := map[string]string{}
+	h.logf("▸ waiting for containers to become healthy…")
 	for {
 		ps, err := h.Compose.Ps(ctx)
 		if err != nil {
 			return err
+		}
+		for _, c := range ps {
+			label := c.State
+			if c.Health != "" && !strings.EqualFold(c.Health, "none") {
+				if strings.EqualFold(c.Health, "healthy") {
+					label = "healthy"
+				} else if c.State == "running" {
+					label = string(c.Health)
+				}
+			}
+			if containerLast[c.Service] != label {
+				containerLast[c.Service] = label
+				h.logf("  ● %s: %s", c.Service, label)
+			}
 		}
 		ready, fatal, restarting, detail := containerHealth(ps)
 		last = detail
@@ -387,13 +467,20 @@ func (h *Healer) VerifyRuntime(ctx context.Context) error {
 					if !r.Healthy() {
 						httpOK = false
 						last = fmt.Sprintf("%s http %s: %s", last, svc.Name, r.Status)
+						if httpLast[svc.Name] != r.Status {
+							httpLast[svc.Name] = r.Status
+							h.logf("  ● %s: http probe %s, retrying…", svc.Name, r.Status)
+						}
 						break
 					}
+					h.logf("  ✓ %s: healthy (http %s)", svc.Name, r.Status)
 				}
 				if httpOK {
+					h.logf("✓ runtime verified")
 					return nil
 				}
 			} else {
+				h.logf("✓ runtime verified")
 				return nil
 			}
 		}

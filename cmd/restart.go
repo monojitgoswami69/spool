@@ -66,7 +66,8 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	logf("%s", ui.SuccessLine("restarted "+lock.Project))
+	waitForHealthy(ctx, mgr, lock, 60*time.Second)
 	showStatus(ctx, mgr, lock)
-	printURLs(lock)
+	printURLs(ctx, mgr, lock)
 	return nil
 }

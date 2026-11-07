@@ -276,9 +276,13 @@ function renderMarkdown(text) {
 async function loadProjects() {
   state.projects = await api('/api/projects');
   if (!state.project) {
-    state.project = state.chat?.project || state.projects[0]?.name || '';
+    state.project = state.chat?.project_id || state.chat?.project || state.projects[0]?.id || '';
   }
   const current = state.project;
+  // Two projects may share a display name (same repo onboarded twice); the
+  // option value must be the unique project id so both stay addressable.
+  const names = {};
+  for (const p of state.projects) names[p.name] = (names[p.name] || 0) + 1;
   els.projectSelect.innerHTML = '';
   const none = document.createElement('option');
   none.value = '';
@@ -286,18 +290,28 @@ async function loadProjects() {
   els.projectSelect.appendChild(none);
   for (const p of state.projects) {
     const opt = document.createElement('option');
-    opt.value = p.name;
-    opt.textContent = p.name;
+    opt.value = p.id || p.name;
+    opt.textContent = names[p.name] > 1 ? `${p.name} · ${p.id.slice(-8)}` : p.name;
     els.projectSelect.appendChild(opt);
   }
-  els.projectSelect.value = state.projects.some((p) => p.name === current) ? current : '';
+  els.projectSelect.value = state.projects.some((p) => (p.id || p.name) === current) ? current : '';
   state.project = els.projectSelect.value;
   updateProjectUI();
 }
 
+// resolveProjectValue maps any project reference (id or name) onto the unique
+// option value used by the project selector — the project id when known.
+function resolveProjectValue(idOrName) {
+  if (!idOrName) return '';
+  const p = state.projects.find((x) => x.id === idOrName)
+    || state.projects.find((x) => x.name === idOrName);
+  return p ? (p.id || p.name) : idOrName;
+}
+
 function updateProjectUI() {
-  const project = state.projects.find((p) => p.name === state.project);
-  els.projectChip.textContent = state.project || '';
+  const project = state.projects.find((p) => (p.id || p.name) === state.project)
+    || state.projects.find((p) => p.name === state.project);
+  els.projectChip.textContent = project ? project.name : (state.project || '');
   els.projectChip.classList.toggle('hidden', !state.project);
   if (!project) {
     els.projectMeta.textContent = state.projects.length ? 'No project selected' : 'Onboard a repo to begin';
@@ -372,7 +386,7 @@ async function newChat() {
     body: JSON.stringify({ project: state.project }),
   });
   state.chat = chat;
-  state.project = chat.project || state.project;
+  state.project = resolveProjectValue(chat.project_id || chat.project) || state.project;
   els.chatTitle.textContent = chat.title || 'New chat';
   renderThread();
   await loadChats();
@@ -382,10 +396,8 @@ async function newChat() {
 async function loadChat(id) {
   const chat = await api(`/api/chats/${id}`);
   state.chat = chat;
-  state.project = chat.project || '';
-  if (state.projects.some((p) => p.name === state.project)) {
-    els.projectSelect.value = state.project;
-  }
+  state.project = resolveProjectValue(chat.project_id || chat.project || '');
+  els.projectSelect.value = state.project;
   els.chatTitle.textContent = chat.title || 'New chat';
   updateProjectUI();
   renderThread();
@@ -426,19 +438,17 @@ function renderMessage(msg) {
   role.innerHTML = '<span class="mark">◈</span><span>Spool</span>';
   article.appendChild(role);
 
-  if (msg.intent && msg.intent.kind) {
-    const chip = document.createElement('div');
-    chip.className = 'intent-chip';
-    chip.textContent = `🎯 ${msg.intent.kind}${msg.intent.project ? ' · ' + msg.intent.project : ''}${msg.intent.service ? '/' + msg.intent.service : ''}`;
-    article.appendChild(chip);
-  }
-
   const body = document.createElement('div');
   body.className = 'assistant-body';
+  msg._bodyEl = body;
   if (msg.text) {
-    body.innerHTML = renderMarkdown(msg.text);
+    const shown = msg.revealPos === undefined ? msg.text : msg.text.slice(0, msg.revealPos);
+    body.innerHTML = renderMarkdown(shown);
   } else if (msg.streaming) {
-    body.innerHTML = '<div class="md"><p>…</p></div>';
+    const status = document.createElement('div');
+    status.className = 'stream-status';
+    status.innerHTML = `<span class="dot"></span>${streamPhrase(msg)}`;
+    body.appendChild(status);
   }
   article.appendChild(body);
 
@@ -471,18 +481,20 @@ function buildPills(events) {
       const name = document.createElement('span');
       name.className = 'name';
       name.textContent = ev.tool || 'tool';
-      const message = document.createElement('span');
-      message.className = 'msg';
-      message.textContent = argsSummary(ev.args);
-      pill.append(name, message);
+      pill.appendChild(name);
       pill._tool = ev.tool;
       wrap.appendChild(pill);
       open.push(pill);
     } else if (ev.type === 'tool_progress') {
       const pill = open[open.length - 1];
       if (pill) {
-        const message = pill.querySelector('.msg');
-        if (message) message.textContent = ev.message || '';
+        let message = pill.querySelector('.msg');
+        if (!message) {
+          message = document.createElement('span');
+          message.className = 'msg';
+          pill.appendChild(message);
+        }
+        message.textContent = ev.message || '';
       }
     } else if (ev.type === 'tool_end') {
       let pill = null;
@@ -512,12 +524,79 @@ function buildPills(events) {
   return wrap;
 }
 
-function argsSummary(args) {
-  if (!args) return '';
-  try {
-    const s = Object.entries(args).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' ');
-    return s.length > 46 ? `${s.slice(0, 46)}…` : s;
-  } catch (_) { return ''; }
+// streamPhrase maps the latest agent event to a short human status phrase.
+// The phrases are statically defined — no LLM calls to describe what the
+// agent is doing.
+const TOOL_PHRASES = {
+  scan_repository: 'Scanning the repository…',
+  inspect_repository: 'Inspecting your project…',
+  onboard_repository: 'Onboarding the repository…',
+  infer_infrastructure: 'Inferring infrastructure…',
+  synthesize_manifests: 'Preparing manifests…',
+  orchestrate_stack: 'Managing the stack…',
+  inspect_logs_and_health: 'Checking logs and health…',
+  diagnose_failure: 'Diagnosing the failure…',
+  heal_service: 'Repairing the stack…',
+  read_repo_file: 'Reading project files…',
+  explain_topology: 'Mapping the topology…',
+  start_public_tunnel: 'Opening a public tunnel…',
+};
+
+function streamPhrase(msg) {
+  const events = msg.events || [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === 'tool_start') {
+      return TOOL_PHRASES[ev.tool] || 'Gathering info…';
+    }
+    if (ev.type === 'tool_progress' && ev.message) {
+      return ev.message.endsWith('…') || ev.message.endsWith('...') ? ev.message : `${ev.message}…`;
+    }
+    if (ev.type === 'tool_end') {
+      return ev.success ? 'Thinking…' : 'Rethinking…';
+    }
+  }
+  return 'Thinking…';
+}
+
+// startReveal progressively renders the finished message so long replies
+// appear to stream in. It is purely cosmetic; the full text is already local.
+function startReveal(placeholder) {
+  stopReveal(placeholder);
+  const text = placeholder.text || '';
+  if (text.length < 80 || text.length > 6000) {
+    placeholder.revealPos = undefined;
+    renderThread();
+    return;
+  }
+  placeholder.revealPos = 0;
+  const total = text.length;
+  const step = Math.max(3, Math.ceil(total / 90));
+  placeholder.revealTimer = setInterval(() => {
+    placeholder.revealPos = Math.min(total, (placeholder.revealPos || 0) + step);
+    if (placeholder._bodyEl) {
+      placeholder._bodyEl.innerHTML = renderMarkdown(text.slice(0, placeholder.revealPos));
+      scrollBottom();
+    } else {
+      renderThread();
+    }
+    if (placeholder.revealPos >= total) {
+      stopReveal(placeholder);
+      if (placeholder.pendingFinal) {
+        placeholder.pendingFinal = false;
+        placeholder.streaming = false;
+        renderThread();
+      }
+    }
+  }, 16);
+}
+
+function stopReveal(placeholder) {
+  if (placeholder && placeholder.revealTimer) {
+    clearInterval(placeholder.revealTimer);
+    placeholder.revealTimer = null;
+  }
+  if (placeholder) placeholder.revealPos = undefined;
 }
 
 /* ---------------------------------------------------------------- send */
@@ -657,6 +736,8 @@ function handleAgentEvent(ev, placeholder) {
     setStatus(ev.success ? `${ev.tool} done` : `${ev.tool} failed`);
   } else if (ev.type === 'final') {
     placeholder.text = ev.message || '';
+    startReveal(placeholder);
+    return;
   }
   renderThread();
 }
@@ -668,17 +749,21 @@ function finalizeTurn(done, placeholder, payload) {
     placeholder.intent = done.message.intent || placeholder.intent;
     placeholder.events = done.message.events || placeholder.events;
   }
-  placeholder.streaming = false;
+  // If the typewriter reveal is still running, defer flipping streaming off
+  // until it completes so the message finishes rendering naturally.
+  if (placeholder.revealTimer) {
+    placeholder.pendingFinal = true;
+  } else {
+    placeholder.streaming = false;
+  }
   if (done.chat) {
     if (!state.chat) state.chat = { messages: [] };
     state.chat.title = done.chat.title || state.chat.title;
     state.chat.project = done.chat.project || state.chat.project;
     state.chat.project_id = done.chat.project_id || state.chat.project_id;
-    if (done.chat.project) {
-      state.project = done.chat.project;
-      if (state.projects.some((p) => p.name === state.project)) {
-        els.projectSelect.value = state.project;
-      }
+    if (done.chat.project_id || done.chat.project) {
+      state.project = resolveProjectValue(done.chat.project_id || done.chat.project);
+      els.projectSelect.value = state.project;
     }
     els.chatTitle.textContent = state.chat.title || 'New chat';
     updateProjectUI();

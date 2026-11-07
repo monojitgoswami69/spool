@@ -40,6 +40,7 @@ const (
 	IntentOnboard       IntentKind = "onboard"
 	IntentSwitchProject IntentKind = "switch_project"
 	IntentHelp          IntentKind = "help"
+	IntentGreeting      IntentKind = "greeting"
 	IntentChat          IntentKind = "chat"
 )
 
@@ -102,6 +103,10 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 	}
 
 	switch {
+	case isGreeting(lower):
+		// Pure greetings ("hi", "what's up") must never reach the tool loop or
+		// the fragile " up" substring match below.
+		it.Kind, it.Confidence = IntentGreeting, 0.99
 	case containsAny(lower, "is it up", "is it running", "is the app up", "is everything up", "what is running", "what's running", "whats running"):
 		it.Kind, it.Confidence = IntentStatus, 0.95
 	case containsAny(lower, "help", "what can you do", "what do you do", "commands", "how do i use"):
@@ -169,7 +174,7 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 		it.Path = strings.Trim(m[1], `"'`)
 	}
 
-	if it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject && it.Kind != IntentOnboard {
+	if it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject && it.Kind != IntentOnboard && it.Kind != IntentGreeting {
 		if it.Project == "" && len(ictx.Projects) > 1 {
 			it.NeedsClarification = true
 			it.Clarification = "Which project do you mean?" + availableProjects(ictx)
@@ -187,6 +192,48 @@ func ParseIntent(text string, ictx IntentContext) Intent {
 		it.Confidence = 0.5
 	}
 	return it
+}
+
+// isGreeting reports whether a message is a pure greeting or small talk —
+// short, no actionable content — so the agent can answer directly instead of
+// burning LLM tool-loop cycles on "hello".
+func isGreeting(lower string) bool {
+	s := strings.TrimRight(strings.TrimSpace(lower), "!?., ")
+	switch s {
+	case "what's up", "whats up", "wassup", "sup", "hi spool", "hello spool", "hey spool":
+		return true
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 || len(words) > 3 {
+		return false
+	}
+	for _, w := range words {
+		switch w {
+		case "hi", "hello", "hey", "yo", "howdy", "hola", "greetings", "thanks", "thank",
+			"you", "spool", "there", "all", "good", "morning", "afternoon", "evening", "friends":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// greetingReply renders the deterministic small-talk answer with light project
+// context. No tools, no LLM.
+func (a *Agent) greetingReply(ictx IntentContext) string {
+	var b strings.Builder
+	b.WriteString("Hey! I'm Spool, your infrastructure agent.")
+	switch {
+	case ictx.CurrentProject != "":
+		fmt.Fprintf(&b, " I'm watching **%s** — ask me for status, health, logs, topology, or env changes; say \"heal\" if something looks off.", ictx.CurrentProject)
+	case len(ictx.Projects) == 1:
+		fmt.Fprintf(&b, " I'm watching **%s** — ask me for status, health, logs, topology, or env changes.", ictx.Projects[0].Name)
+	case len(ictx.Projects) > 1:
+		fmt.Fprintf(&b, " %d projects are onboarded — ask for status, or say \"switch to <project>\" to focus one.", len(ictx.Projects))
+	default:
+		b.WriteString(" Nothing is onboarded yet — say \"onboard <git-url-or-path>\" and I'll scan, containerize, and verify it.")
+	}
+	return b.String()
 }
 
 // ClassifyIntent asks the LLM for a strict intent object, falling back to the
@@ -228,7 +275,7 @@ func ClassifyIntent(ctx context.Context, client domain.LLMClient, text string, i
 		it.Clarification = fmt.Sprintf("I don't see service %q in %s.", it.Service, it.Project)
 		it.Confidence = 0.4
 	}
-	if it.Project == "" && it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject && it.Kind != IntentOnboard {
+	if it.Project == "" && it.Kind != IntentHelp && it.Kind != IntentScan && it.Kind != IntentChat && it.Kind != IntentSwitchProject && it.Kind != IntentOnboard && it.Kind != IntentGreeting {
 		if ictx.CurrentProject != "" {
 			it.Project = ictx.CurrentProject
 		} else if len(ictx.Projects) == 1 {
@@ -292,6 +339,8 @@ func (it Intent) Describe() string {
 		return "switch to " + it.Project
 	case IntentHelp:
 		return "help"
+	case IntentGreeting:
+		return "greeting"
 	default:
 		return "general request"
 	}
@@ -347,6 +396,9 @@ func (a *Agent) RunIntent(ctx context.Context, text string, ictx IntentContext) 
 		return res, nil
 	case IntentHelp:
 		res := a.resultFor(helpText(), intent)
+		return res, nil
+	case IntentGreeting:
+		res := a.resultFor(a.greetingReply(ictx), intent)
 		return res, nil
 	}
 

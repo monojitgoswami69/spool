@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -61,7 +62,8 @@ func runHeal(cmd *cobra.Command, args []string) error {
 	}
 	clearFailureLog(mgr)
 	logf("%s", ui.SuccessLine(res.Summary))
+	waitForHealthy(ctx, mgr, lock, 60*time.Second)
 	showStatus(ctx, mgr, lock)
-	printURLs(lock)
+	printURLs(ctx, mgr, lock)
 	return nil
 }

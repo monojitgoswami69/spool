@@ -109,6 +109,42 @@ func (c *Compose) Build(ctx context.Context, service string) (string, error) {
 	return c.run(ctx, "Build", args...)
 }
 
+// BuildProgress builds like Build while streaming each combined-output line to
+// onLine as it arrives, so callers can surface live build progress. The
+// returned string is still the full output. When onLine is nil it behaves
+// exactly like Build.
+func (c *Compose) BuildProgress(ctx context.Context, service string, onLine func(string)) (string, error) {
+	args := []string{"build"}
+	if service != "" {
+		args = append(args, service)
+	}
+	cmd, _ := c.command(ctx, args...)
+	var buf bytes.Buffer
+	if onLine == nil {
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+	} else {
+		pr, pw := io.Pipe()
+		cmd.Stdout = io.MultiWriter(&buf, pw)
+		cmd.Stderr = io.MultiWriter(&buf, pw)
+		go func() {
+			sc := bufio.NewScanner(pr)
+			sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for sc.Scan() {
+				onLine(sc.Text())
+			}
+			pr.Close()
+		}()
+		defer pw.Close()
+	}
+	err := cmd.Run()
+	out := buf.String()
+	if err != nil {
+		return out, domain.E(domain.KindDocker, "docker.Build", fmt.Sprintf("Build failed: %s", TailLines(out, 20)), err)
+	}
+	return out, nil
+}
+
 // Up starts the stack in the background.
 func (c *Compose) Up(ctx context.Context, extra ...string) (string, error) {
 	args := append([]string{"up", "-d"}, extra...)

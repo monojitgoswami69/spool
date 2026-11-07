@@ -126,7 +126,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if updateNoRun {
 		logf("%s", ui.Step(4, 5, "Skipping rebuild (--no-run)"))
 		logf("%s", ui.Step(5, 5, fmt.Sprintf("Done · %d service(s), %d infra", len(lock.Services), len(lock.Infra))))
-		printURLs(lock)
+		printURLs(ctx, mgr, lock)
 		return nil
 	}
 
@@ -158,7 +158,8 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	logf("%s", ui.Step(5, 5, "Updated and healthy"))
+	waitForHealthy(ctx, mgr, lock, 60*time.Second)
 	showStatus(ctx, mgr, lock)
-	printURLs(lock)
+	printURLs(ctx, mgr, lock)
 	return nil
 }

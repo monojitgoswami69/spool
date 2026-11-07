@@ -214,6 +214,24 @@ func IsSecretName(name string) bool {
 	return false
 }
 
+// IsValidEnvName reports whether name is a valid shell/Docker environment
+// variable name: [A-Za-z_][A-Za-z0-9_]*.
+func IsValidEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+			continue
+		}
+		if i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func isVendorKey(name string) bool {
 	up := strings.ToUpper(name)
 	for _, p := range vendorPrefixes {

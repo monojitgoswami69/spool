@@ -22,18 +22,21 @@ type Server struct {
 	backend Backend
 	store   *ChatStore
 	mux     *http.ServeMux
+	// Version is reported by /api/health. Callers should set it from the
+	// build-injected cmd.Version instead of hardcoding a release string.
+	Version string
 }
 
 // New wires routes and assets.
 func New(backend Backend, store *ChatStore) *Server {
-	s := &Server{backend: backend, store: store, mux: http.NewServeMux()}
+	s := &Server{backend: backend, store: store, mux: http.NewServeMux(), Version: "dev"}
 	s.mux.HandleFunc("/api/projects", s.handleProjects)
 	s.mux.HandleFunc("/api/config", s.handleConfig)
 	s.mux.HandleFunc("/api/chats", s.handleChats)
 	s.mux.HandleFunc("/api/chats/", s.handleChat)
 	s.mux.HandleFunc("/api/chat", s.handleChatTurn)
 	s.mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": "v0.4.0"})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": s.Version})
 	})
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err == nil {

@@ -127,7 +127,7 @@ tunnel tooling.
 | `spool status [project]` | Container/health/port table; no arg lists projects (`list`) |
 | `spool stats [project]` | Live CPU, memory, network, and PID stats |
 | `spool logs [project] [service]` | Tail or stream logs (`-f`, `-n`) |
-| `spool env [project] [set KEY=VALUE \| unset KEY]` | List/required vars or edit overrides (auto-applies) |
+| `spool env [project] [set KEY=VALUE \| unset KEY \| config]` | List/required vars or edit overrides (auto-applies); `config` opens the interactive editor |
 | `spool setup` | Interactive provider/model/key/GitHub wizard with live verification |
 | `spool config [show\|path\|edit\|set <key> <value>]` | Interactive config panel (or show/set for scripts) |
 | `spool doctor` | Environment preflight (non-zero exit on critical failures) |

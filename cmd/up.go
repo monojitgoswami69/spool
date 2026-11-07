@@ -82,7 +82,8 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	logf("%s", ui.SuccessLine("stack is healthy"))
+	waitForHealthy(ctx, mgr, lock, 60*time.Second)
 	showStatus(ctx, mgr, lock)
-	printURLs(lock)
+	printURLs(ctx, mgr, lock)
 	return nil
 }

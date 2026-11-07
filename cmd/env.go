@@ -20,8 +20,9 @@ import (
 )
 
 var envCmd = &cobra.Command{
-	Use:   "env [project] [set KEY=VALUE | unset KEY | list]",
+	Use:   "env [project] [set KEY=VALUE | unset KEY | list | config]",
 	Short: "Show and edit required environment variables",
+	Long:  "Show and edit project environment variables. `spool env <project> config` opens an interactive editor for every variable, including adding new ones.",
 	Args:  cobra.ArbitraryArgs,
 	RunE:  runEnv,
 }
@@ -36,7 +37,7 @@ func runEnv(cmd *cobra.Command, args []string) error {
 	var rest []string
 	if len(args) > 0 {
 		switch args[0] {
-		case "list", "set", "unset":
+		case "list", "set", "unset", "config":
 			action = args[0]
 			rest = args[1:]
 		default:
@@ -54,6 +55,8 @@ func runEnv(cmd *cobra.Command, args []string) error {
 	switch action {
 	case "list":
 		return listEnv(mgr, lock)
+	case "config":
+		return runEnvPanel(mgr, lock)
 	case "set":
 		if len(rest) == 0 {
 			return fmt.Errorf("usage: spool env %s set KEY=VALUE", mgr.ID)
@@ -133,7 +136,7 @@ func listEnv(mgr *state.Manager, lock *domain.Lock) error {
 	logf("%s", ui.Table([]string{"Variable", "Value", "Status", "Source"}, rows, "environment · "+lock.Project))
 	logf("%s", ui.MutedStyle.Render("file: "+mgr.EnvPath()))
 	if missing > 0 {
-		logf("%s", ui.WarningLine(fmt.Sprintf("%d variable(s) missing. Set one with: spool env %s set KEY=VALUE", missing, mgr.ID)))
+		logf("%s", ui.WarningLine(fmt.Sprintf("%d variable(s) missing. Set one with: spool env %s set KEY=VALUE, or run: spool env %s config", missing, mgr.ID, mgr.ID)))
 		if isInteractive() && confirm(fmt.Sprintf("Configure %d missing variable(s) now?", missing)) {
 			return configureMissingEnv(mgr, lock, missingKeys)
 		}

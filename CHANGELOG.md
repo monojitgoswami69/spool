@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.4.1
+
+### Honest status & live progress
+- `spool init/up/restart/heal/update` now stream live build progress (BuildKit
+  steps) and per-service health-check transitions instead of going silent
+  during the build/verify phase.
+- Final status waits for health checks to settle before rendering, and live
+  endpoints are only printed for containers that are actually running — a
+  stopped stack no longer advertises URLs (`spool status` included).
+- `/api/health` reports the build-injected version instead of a hardcoded one.
+
+### Web console
+- Greetings and small talk are answered deterministically — no LLM, no tools.
+- Dynamic streaming states ("Thinking…", "Checking logs and health…", …) while
+  the agent works, and a typewriter reveal for finished replies.
+- Intent tags hidden; nerd stats moved to hover-only; tool pills no longer
+  dump raw JSON args.
+- Project selector addresses projects by unique id, so two projects sharing a
+  name (same repo onboarded twice) stay separately selectable.
+
+### Interactive environment editor
+- New `spool env <project> config`: an interactive panel to edit, add, unset,
+  and reveal project variables (secrets masked), persisting as you type and
+  applying to running stacks on exit.
+
 ## v0.4.0
 
 ### Web control plane

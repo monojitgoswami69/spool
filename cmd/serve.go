@@ -49,6 +49,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	client, _ := llmFor(true)
 	backend := &localWebBackend{client: client}
 	srv := web.New(backend, store)
+	srv.Version = Version
 
 	addr := net.JoinHostPort(serveHost, fmt.Sprintf("%d", servePort))
 	httpServer := &http.Server{

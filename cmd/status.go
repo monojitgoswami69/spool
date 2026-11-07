@@ -31,7 +31,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	showStatus(ctx, mgr, lock)
-	printURLs(lock)
+	printURLs(ctx, mgr, lock)
 	return nil
 }
 

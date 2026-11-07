@@ -336,18 +336,6 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .assistant-body .md p { margin: 0 0 10px; }
 .assistant-body .md p:last-child { margin-bottom: 0; }
-.intent-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 6px;
-  padding: 2px 7px;
-  margin-bottom: 8px;
-}
 .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .pill {
   display: inline-flex;
@@ -368,12 +356,32 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 .pill.fail .dot { background: var(--danger); }
 .pill .name { color: var(--text); }
 .pill .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.stream-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 2px 0;
+}
+.stream-status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: pulse 1.2s ease infinite;
+  flex: none;
+}
 .msg-tools {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 8px;
+  opacity: 0;
+  transition: opacity .15s ease;
 }
+.msg:hover .msg-tools,
+.msg-tools:focus-within { opacity: 1; }
 .nerd-link {
   border: 0;
   background: transparent;
