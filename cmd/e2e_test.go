@@ -116,3 +116,66 @@ dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "psycopg2-binary>=2
 		t.Fatalf("repo .env secret was not imported:\n%s", env)
 	}
 }
+
+func TestUpdatePreservesHostPortsE2E(t *testing.T) {
+	t.Setenv("SPOOL_HOME", t.TempDir())
+	repo := t.TempDir()
+	writeFixture(t, repo, "package.json", `{"name":"demo-web","dependencies":{"next":"16.0.0"},"scripts":{"build":"next build","start":"next start"}}`)
+	writeFixture(t, repo, "services/api/pyproject.toml", "[project]\nname=\"demo-api\"\ndependencies=[\"fastapi\",\"psycopg2-binary\"]\n")
+	writeFixture(t, repo, "services/api/main.py", "from fastapi import FastAPI\napp=FastAPI()\n")
+	writeFixture(t, repo, "services/api/.env.example", "JWT_SECRET=\n")
+
+	oldQuiet, oldNoRun, oldNoAgent, oldMax, oldName := flagQuiet, initNoRun, initNoAgent, initMaxSvc, initName
+	flagQuiet, initNoRun, initNoAgent, initMaxSvc, initName = true, true, true, 12, ""
+	defer func() {
+		flagQuiet, initNoRun, initNoAgent, initMaxSvc, initName = oldQuiet, oldNoRun, oldNoAgent, oldMax, oldName
+	}()
+	if err := runInit(nil, []string{repo}); err != nil {
+		t.Fatal(err)
+	}
+	managers, _ := state.List()
+	if len(managers) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(managers))
+	}
+	mgr := managers[0]
+	before, err := mgr.LoadLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	webPort := before.PortMap["demo-web"]
+	if webPort == 0 {
+		t.Fatalf("missing web port: %+v", before.PortMap)
+	}
+
+	writeFixture(t, repo, "apps/extra/package.json", `{"name":"extra","dependencies":{"express":"4"},"scripts":{"start":"node server.js"}}`)
+
+	oldUR, oldUA := updateNoRun, updateNoAgent
+	updateNoRun, updateNoAgent = true, true
+	defer func() { updateNoRun, updateNoAgent = oldUR, oldUA }()
+	if err := runUpdate(nil, []string{mgr.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := mgr.LoadLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.PortMap["demo-web"] != webPort {
+		t.Fatalf("host port changed: %d -> %d", webPort, after.PortMap["demo-web"])
+	}
+	found := false
+	for _, svc := range after.Services {
+		if svc.Name == "extra" {
+			found = true
+			if svc.HostPort == 0 {
+				t.Fatal("new service has no host port")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("update did not detect the new service: %+v", after.Services)
+	}
+	if _, err := os.Stat(filepath.Join(mgr.Dir, "Dockerfile.extra")); err != nil {
+		t.Fatalf("missing new Dockerfile: %v", err)
+	}
+}

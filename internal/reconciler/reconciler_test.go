@@ -108,3 +108,15 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+func TestReconcileWithExistingKeepsHostPort(t *testing.T) {
+	alloc := portprobe.New()
+	alloc.Reserve(3000) // simulate a busy preferred port
+	svcs := []*domain.Service{{Name: "web", Framework: domain.FrameworkNextJS, DefaultPort: 3000}}
+	if err := ReconcileWithExisting(svcs, alloc, map[string]string{}, map[string]int{"web": 4321}); err != nil {
+		t.Fatal(err)
+	}
+	if svcs[0].HostPort != 4321 || svcs[0].Port != 3000 {
+		t.Fatalf("ports = %d/%d want 4321/3000", svcs[0].HostPort, svcs[0].Port)
+	}
+}

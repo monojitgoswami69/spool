@@ -18,10 +18,11 @@ var (
 )
 
 var upCmd = &cobra.Command{
-	Use:   "up [project]",
-	Short: "Start a project's stack and wait for health",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runUp,
+	Use:     "up [project]",
+	Aliases: []string{"start"},
+	Short:   "Start a project's stack and wait for health",
+	Args:    cobra.MaximumNArgs(1),
+	RunE:    runUp,
 }
 
 func init() {

@@ -110,6 +110,7 @@ tunnel tooling.
 | `spool restart [project]` | Recreate and health-verify a stack |
 | `spool open [project]` | Open the live URL (`--print`, `--service`) |
 | `spool nuke <project>` | Destroy containers, volumes, clone, and state (aliases: `incinerate`, `remove`) |
+| `spool update [project]` | Re-scan + regenerate while preserving host ports (`--no-run`) |
 | `spool heal [project]` | Deterministic + LLM closed-loop repair (`--tries`) |
 | `spool explain [project]` | Dependency DAG, port map, repair provenance, required config |
 | `spool dash [project]` | Three-tab live dashboard |

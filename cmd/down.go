@@ -11,10 +11,11 @@ import (
 var downVolumes bool
 
 var downCmd = &cobra.Command{
-	Use:   "down [project]",
-	Short: "Stop a project's stack",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runDown,
+	Use:     "down [project]",
+	Aliases: []string{"stop"},
+	Short:   "Stop a project's stack",
+	Args:    cobra.MaximumNArgs(1),
+	RunE:    runDown,
 }
 
 func init() {

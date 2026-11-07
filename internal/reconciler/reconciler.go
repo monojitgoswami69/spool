@@ -16,6 +16,12 @@ import (
 
 // Reconcile mutates services with host ports, bind env, and start commands.
 func Reconcile(services []*domain.Service, alloc *portprobe.Allocator, globalEnv map[string]string) error {
+	return ReconcileWithExisting(services, alloc, globalEnv, nil)
+}
+
+// ReconcileWithExisting behaves like Reconcile but preserves pre-existing host
+// port assignments (used by `spool update` so a running stack keeps its URLs).
+func ReconcileWithExisting(services []*domain.Service, alloc *portprobe.Allocator, globalEnv map[string]string, existing map[string]int) error {
 	if alloc == nil {
 		alloc = portprobe.New()
 	}
@@ -46,9 +52,19 @@ func Reconcile(services []*domain.Service, alloc *portprobe.Allocator, globalEnv
 		} else if len(services) == 1 && globalPort > 0 {
 			target = globalPort
 		}
-		hostPort, err := alloc.Allocate(target)
-		if err != nil {
-			return fmt.Errorf("reconciler: allocate host port for %s: %w", svc.Name, err)
+		hostPort := 0
+		if existing != nil {
+			if kept, ok := existing[svc.Name]; ok && kept > 0 {
+				hostPort = kept
+				alloc.Reserve(kept)
+			}
+		}
+		if hostPort == 0 {
+			var err error
+			hostPort, err = alloc.Allocate(target)
+			if err != nil {
+				return fmt.Errorf("reconciler: allocate host port for %s: %w", svc.Name, err)
+			}
 		}
 		svc.Port = target
 		svc.HostPort = hostPort
