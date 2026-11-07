@@ -1,19 +1,21 @@
 :root {
-  --bg: #ffffff;
-  --bg-soft: #f7f7f8;
-  --bg-hover: #f0f0f2;
-  --bg-code: #f6f6f7;
-  --text: #171717;
-  --text-muted: #6f6f76;
-  --text-faint: #a1a1a8;
-  --border: #e7e7ea;
-  --border-strong: #d6d6db;
+  color-scheme: light;
+  --bg: #faf7f0;
+  --bg-soft: #f3eee2;
+  --bg-hover: #ebe4d5;
+  --bg-elev: #fffcf6;
+  --bg-code: #f4efe3;
+  --text: #26231d;
+  --text-muted: #746d60;
+  --text-faint: #a29a8a;
+  --border: #e6dece;
+  --border-strong: #d7ccb8;
   --accent: #4f46e5;
-  --accent-soft: #eef2ff;
-  --success: #0f9f6e;
-  --warn: #b45309;
-  --danger: #dc2626;
-  --shadow: 0 1px 2px rgba(16, 16, 20, .04), 0 8px 24px rgba(16, 16, 20, .06);
+  --accent-soft: #ece8fa;
+  --success: #2f7d5b;
+  --warn: #a16207;
+  --danger: #b91c1c;
+  --shadow: 0 1px 2px rgba(70, 60, 40, .05), 0 10px 28px rgba(70, 60, 40, .07);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --sidebar: 264px;
@@ -21,34 +23,40 @@
   --thread: 840px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e0e10;
-    --bg-soft: #151518;
-    --bg-hover: #1c1c20;
-    --bg-code: #17171b;
-    --text: #f2f2f4;
-    --text-muted: #a0a0a8;
-    --text-faint: #6c6c76;
-    --border: #26262c;
-    --border-strong: #33333a;
-    --accent: #8b85ff;
-    --accent-soft: #1c1b33;
-    --success: #34d399;
-    --warn: #fbbf24;
-    --danger: #f87171;
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121110;
+  --bg-soft: #191714;
+  --bg-hover: #221e19;
+  --bg-elev: #1b1814;
+  --bg-code: #1b1814;
+  --text: #f3eee4;
+  --text-muted: #a59c8d;
+  --text-faint: #6f675b;
+  --border: #2b2620;
+  --border-strong: #3a332a;
+  --accent: #a5a0ff;
+  --accent-soft: #24213a;
+  --success: #4ade80;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 10px 28px rgba(0, 0, 0, .4);
 }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+::selection { background: var(--accent-soft); color: var(--text); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
 html, body { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
+  transition: background-color .18s ease, color .18s ease;
   font-size: 14px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
@@ -105,7 +113,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
   width: 100%;
   padding: 9px 10px;
   border: 1px solid var(--border-strong);
-  background: var(--bg);
+  background: var(--bg-elev);
   border-radius: 9px;
   color: var(--text);
   text-align: left;
@@ -177,7 +185,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
   opacity: 0;
 }
 .chat-item:hover .chat-delete { opacity: 1; }
-.chat-delete:hover { color: var(--danger); background: var(--bg); }
+.chat-delete:hover { color: var(--danger); background: var(--bg-elev); }
 .side-foot {
   border-top: 1px solid var(--border);
   padding: 12px 4px 2px;
@@ -196,7 +204,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 .project-select {
   width: 100%;
   border: 1px solid var(--border-strong);
-  background: var(--bg);
+  background: var(--bg-elev);
   border-radius: 8px;
   padding: 7px 8px;
   font-size: 12px;
@@ -289,7 +297,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .prompts button {
   border: 1px solid var(--border-strong);
-  background: var(--bg);
+  background: var(--bg-elev);
   color: var(--text-muted);
   border-radius: 999px;
   padding: 6px 12px;
@@ -424,7 +432,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
   align-items: flex-end;
   gap: 8px;
   border: 1px solid var(--border-strong);
-  background: var(--bg);
+  background: var(--bg-elev);
   border-radius: 14px;
   padding: 7px 7px 7px 12px;
   box-shadow: var(--shadow);
@@ -472,7 +480,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
   left: 0;
   right: 0;
   bottom: calc(100% + 8px);
-  background: var(--bg);
+  background: var(--bg-elev);
   border: 1px solid var(--border-strong);
   border-radius: 10px;
   box-shadow: var(--shadow);
@@ -522,7 +530,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 .nerd-summary dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
 .nerd-event {
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-elev);
   border-radius: 8px;
   padding: 7px 9px;
   margin-bottom: 6px;
@@ -552,7 +560,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(12, 12, 16, .38);
+  background: rgba(45, 38, 28, .35);
   display: grid;
   place-items: center;
   z-index: 30;
@@ -560,7 +568,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .modal-card {
   width: min(520px, 100%);
-  background: var(--bg);
+  background: var(--bg-elev);
   border: 1px solid var(--border-strong);
   border-radius: 14px;
   box-shadow: var(--shadow);

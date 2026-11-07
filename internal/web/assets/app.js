@@ -69,6 +69,7 @@ async function init() {
     nerdBody: $('#nerd-body'),
     nerdToggle: $('#nerd-toggle'),
     nerdClose: $('#nerd-close'),
+    themeToggle: $('#theme-toggle'),
     modal: $('#modal'),
     modalText: $('#modal-text'),
     modalArgs: $('#modal-args'),
@@ -77,6 +78,7 @@ async function init() {
     toast: $('#toast'),
     slash: $('#slash-menu'),
   };
+  applyTheme(readTheme(), false);
   bind();
   autoresize();
   try {
@@ -104,6 +106,9 @@ function bind() {
   els.modal.addEventListener('click', (e) => { if (e.target === els.modal) hideModal(); });
   els.nerdToggle.addEventListener('click', () => toggleNerd());
   els.nerdClose.addEventListener('click', () => toggleNerd(false));
+  els.themeToggle.addEventListener('click', () => {
+    applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  });
   els.projectSelect.addEventListener('change', () => setProject(els.projectSelect.value));
   $$('.prompts button').forEach((b) => b.addEventListener('click', () => {
     els.input.value = b.dataset.prompt || '';
@@ -906,4 +911,20 @@ function onInputKey(e) {
 
 function updateSlashActive(items) {
   items.forEach((el, i) => el.classList.toggle('active', i === state.slashIndex));
+}
+
+function readTheme() {
+  try { return localStorage.getItem('spool-theme') || 'light'; } catch (_) { return 'light'; }
+}
+
+function applyTheme(theme, persist = true) {
+  const value = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = value;
+  if (els.themeToggle) {
+    els.themeToggle.textContent = value === 'dark' ? 'Light theme' : 'Dark theme';
+    els.themeToggle.setAttribute('aria-pressed', value === 'dark' ? 'true' : 'false');
+  }
+  if (persist) {
+    try { localStorage.setItem('spool-theme', value); } catch (_) {}
+  }
 }

@@ -262,8 +262,10 @@ func TestAssetsContainModalAndRetryFixes(t *testing.T) {
 	defer res.Body.Close()
 	var css bytes.Buffer
 	_, _ = css.ReadFrom(res.Body)
-	if !strings.Contains(css.String(), "[hidden]") {
-		t.Fatal("CSS must force hidden elements to hide (modal/nerd)")
+	for _, want := range []string{"[hidden]", "#faf7f0", "data-theme=\"dark\""} {
+		if !strings.Contains(css.String(), want) {
+			t.Errorf("CSS missing %q", want)
+		}
 	}
 	res, err = http.Get(srv.URL + "/assets/app.js")
 	if err != nil {
