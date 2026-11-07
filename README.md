@@ -62,7 +62,7 @@ make install          # installs to $(go env GOPATH)/bin
 make build            # produces ./spool
 ```
 
-Requires Go 1.23+ and Docker with Compose v2.
+Requires Go 1.27+ and Docker with Compose v2.
 
 ---
 
