@@ -347,3 +347,17 @@ func Dir(parts ...string) (string, error) {
 	}
 	return p, nil
 }
+
+// DotEnvFiles returns the dotenv files Spool consults at runtime.
+func DotEnvFiles() []string { return envFiles() }
+
+// LoadEnvIntoProcess loads dotenv files into the process environment without
+// overriding variables that are already set. This makes .env work for every
+// command, not just those that call Resolve.
+func LoadEnvIntoProcess() {
+	for k, v := range LoadDotEnv(envFiles()...) {
+		if strings.TrimSpace(os.Getenv(k)) == "" {
+			_ = os.Setenv(k, v)
+		}
+	}
+}

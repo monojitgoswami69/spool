@@ -3,7 +3,11 @@ package generator
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/monojitgoswami69/spool/internal/domain"
 )
@@ -184,37 +188,40 @@ func generatePython(svc *domain.Service, opts Options) string {
 		torchIndex = " --extra-index-url https://download.pytorch.org/whl/cpu"
 	}
 
-	hasReq := existsFile(opts.RepoRoot, joinRel(path, "requirements.txt"))
+	reqFile := firstExistingFile(opts.RepoRoot, path, []string{
+		"requirements.txt", "requirements/base.txt", "requirements/prod.txt", "requirements/common.txt",
+	})
 	hasPyproject := existsFile(opts.RepoRoot, joinRel(path, "pyproject.toml"))
 	hasSetup := existsFile(opts.RepoRoot, joinRel(path, "setup.py"))
+	pyDeps, pyHasBuild := readPyProjectDeps(opts.RepoRoot, path)
+
+	// Dependency-only pyproject files (no [build-system]) are extremely common
+	// in app repos; installing "." would fail. Install the declared
+	// dependencies directly instead.
+	pipTarget := ""
+	switch {
+	case reqFile != "":
+		pipTarget = " -r " + reqFile
+	case hasPyproject && len(pyDeps) > 0 && !pyHasBuild:
+		pipTarget = " " + shellJoin(pyDeps)
+	case hasPyproject:
+		pipTarget = " ."
+	case hasSetup:
+		pipTarget = " ."
+	default:
+		pipTarget = " -r requirements.txt"
+	}
 
 	var install string
 	switch svc.PackageManager {
 	case domain.PMUv:
-		install = "pip install --upgrade pip uv && "
-		if hasReq {
-			install += "uv pip install" + torchIndex + " -r requirements.txt"
-		} else if hasPyproject {
-			install += "uv pip install" + torchIndex + " ."
-		} else {
-			install += "uv pip install" + torchIndex + " -r requirements.txt"
-		}
+		install = "pip install --upgrade pip uv && uv pip install" + torchIndex + pipTarget
 	case domain.PMPoetry:
 		install = "pip install --upgrade pip poetry && poetry config virtualenvs.create false && poetry install --no-root --no-interaction"
 	case domain.PMPipenv:
 		install = "pip install --upgrade pip pipenv && (pipenv install --system --deploy || pipenv install --system)"
 	default:
-		install = "pip install --upgrade pip && "
-		switch {
-		case hasReq:
-			install += "pip install" + torchIndex + " -r requirements.txt"
-		case hasPyproject:
-			install += "pip install" + torchIndex + " ."
-		case hasSetup:
-			install += "pip install" + torchIndex + " ."
-		default:
-			install += "pip install" + torchIndex + " -r requirements.txt"
-		}
+		install = "pip install --upgrade pip && pip install" + torchIndex + pipTarget
 	}
 
 	var b strings.Builder
@@ -345,4 +352,58 @@ func joinRel(path, file string) string {
 		return file
 	}
 	return path + "/" + file
+}
+
+func firstExistingFile(root, relDir string, candidates []string) string {
+	for _, c := range candidates {
+		if existsFile(root, joinRel(relDir, c)) {
+			return c
+		}
+	}
+	return ""
+}
+
+func readPyProjectDeps(root, relDir string) (deps []string, hasBuildSystem bool) {
+	if root == "" {
+		return nil, false
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(joinRel(relDir, "pyproject.toml"))))
+	if err != nil {
+		return nil, false
+	}
+	var p struct {
+		Project struct {
+			Dependencies []string `toml:"dependencies"`
+		} `toml:"project"`
+		Tool struct {
+			Poetry struct {
+				Dependencies map[string]any `toml:"dependencies"`
+			} `toml:"poetry"`
+		} `toml:"tool"`
+		BuildSystem struct {
+			Requires []string `toml:"requires"`
+		} `toml:"build-system"`
+	}
+	if err := toml.Unmarshal(data, &p); err != nil {
+		return nil, false
+	}
+	for _, d := range p.Project.Dependencies {
+		if strings.TrimSpace(d) != "" {
+			deps = append(deps, strings.TrimSpace(d))
+		}
+	}
+	for name := range p.Tool.Poetry.Dependencies {
+		if !strings.EqualFold(name, "python") && strings.TrimSpace(name) != "" {
+			deps = append(deps, name)
+		}
+	}
+	return deps, len(p.BuildSystem.Requires) > 0
+}
+
+func shellJoin(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, a := range args {
+		quoted = append(quoted, "'"+strings.ReplaceAll(a, "'", `'"'"'`)+"'")
+	}
+	return strings.Join(quoted, " ")
 }

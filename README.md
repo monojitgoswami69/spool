@@ -1,0 +1,199 @@
+# Spool
+
+**Autonomous infrastructure control plane & self-healing DevOps agent.**
+
+Spool takes any repository — a local path or a Git URL — and turns it into a
+running, health-verified, containerized development stack. It detects services
+across Node/TypeScript (including monorepos), Python, Go, and Rust, infers the
+backing infrastructure it needs, generates portable multi-stage Dockerfiles and
+a `docker-compose.yml`, allocates conflict-free host ports, starts the stack,
+verifies it with real HTTP probes, and repairs build or runtime failures in a
+closed loop.
+
+```
+$ spool init https://github.com/acme/app
+[1/8] Resolving repository source
+[2/8] Scanning services
+[3/8] Discovering environment variables
+[4/8] Inferring infrastructure
+[5/8] Generating Dockerfiles and compose
+[6/8] Writing environment and state
+[7/8] Building and verifying the stack
+[8/8] Stack healthy in 41.2s
+```
+
+Spool also ships a conversational agent:
+
+```
+$ spool chat
+› why is the api unhealthy?
+
+⚡ inspect_logs_and_health (service=api)
+✓ inspect_logs_and_health — 2 containers, 1 unhealthy
+Spool  The api container is healthy but your web service cannot reach it:
+       API_URL still points at localhost. I can reconcile the service URLs
+       and restart the stack.
+```
+
+---
+
+## Highlights
+
+- **Multi-language detection** — Node/Next/Nuxt/Remix/SvelteKit/Nest/Vite/CRA/Astro/Express/Fastify/Koa, pnpm/npm/yarn/bun workspaces, Python (PEP 621, Poetry, uv, pipenv, requirements), Go modules, and Rust crates.
+- **Infrastructure inference** — Postgres, Redis, MySQL, Mongo, Kafka (KRaft), MinIO, RabbitMQ, Elasticsearch from dependencies and env-var values, with **managed-cloud suppression** (Neon, Supabase, RDS, Upstash, Atlas, Confluent Cloud, and more).
+- **Dynamic port allocation for everything** — apps *and* infra containers get conflict-free host ports (e.g. `5439:5432`) while in-network URLs stay on the standard container port (`postgres:5432`).
+- **Hermetic generated images** — multi-stage Dockerfiles with non-root-friendly runtimes and curl for health probes. **No unconditional PyTorch index**: `download.pytorch.org` is added only when `torch` is actually a dependency.
+- **Real health verification** — container state *and* HTTP readiness are checked; failures are never discarded or reported as success.
+- **Closed-loop healer** — deterministic fast rules first, then an invariant-guarded LLM repair that can only touch generated `Dockerfile.*` / `docker-compose.yml`, with a stale-context guard and SHA-256 provenance in `repairs.json`.
+- **Jailed agent** — every agent file read/write goes through `safefs`, a symlink-resolved, repo-root-jailed boundary. Path traversal (`..`, absolute paths, symlink escapes) is rejected.
+- **Three-tab dashboard** — live logs, env overrides, and container controls/stats in a Bubble Tea TUI.
+- **Ephemeral public previews** — `spool tunnel` uses cloudflared (`trycloudflare.com`) with a localhost.run SSH fallback.
+- **Provider-agnostic LLM** — zero SDKs, plain `net/http`: Gemini, OpenAI, Anthropic, Groq, and Ollama, with native tool calling.
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/monojitgoswami69/spool.git
+cd spool
+make install          # installs to $(go env GOPATH)/bin
+# or
+make build            # produces ./spool
+```
+
+Requires Go 1.23+ and Docker with Compose v2.
+
+---
+
+## Configuration
+
+Spool reads credentials from, in order of precedence:
+
+1. OS environment variables
+2. dotenv files (`~/.spool/.env`, `$SPOOL_ENV_FILE`, `./.env`)
+3. `~/.spool/config.json`
+
+Supported variables:
+
+| Variable | Purpose |
+|---|---|
+| `SPOOL_LLM_PROVIDER` | `gemini`, `openai`, `anthropic`, `groq`, `ollama` |
+| `SPOOL_LLM_MODEL` | model id (defaults per provider) |
+| `SPOOL_LLM_BASE_URL` | override endpoint (Ollama / self-hosted) |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GROQ_API_KEY` | provider keys |
+| `SPOOL_LLM_API_KEY` / `LLM_API_KEY` | generic key fallback |
+| `GITHUB_PAT` / `GH_TOKEN` | private repo clones |
+| `SPOOL_HOME` | state root (default `~/.spool`) |
+
+Copy `.env.example` to `.env` and fill in a key. **`.env` is gitignored and must
+never be committed.**
+
+Run `spool doctor` to verify git, Docker, Compose v2, LLM credentials, and
+tunnel tooling.
+
+---
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `spool init [path-or-url]` | Full pipeline: clone → scan → infer → generate → build → heal → verify |
+| `spool chat [project]` | Interactive agent REPL with streaming tool pills |
+| `spool up [project]` | Start a stack and wait for real health |
+| `spool down [project]` | Stop a stack (`-v` removes volumes) |
+| `spool nuke <project>` | Destroy containers, volumes, clone, and state (aliases: `incinerate`, `remove`) |
+| `spool heal [project]` | Deterministic + LLM closed-loop repair (`--tries`) |
+| `spool explain [project]` | Dependency DAG, port map, repair provenance, required config |
+| `spool dash [project]` | Three-tab live dashboard |
+| `spool tunnel [project]` | Ephemeral public preview URL (`--port`) |
+| `spool status [project]` | Parsed container/health/port table |
+| `spool logs [project] [service]` | Tail or stream logs (`-f`, `-n`) |
+| `spool doctor` | Environment preflight |
+
+Global flags: `--verbose/-v`, `--quiet/-q`, `--no-color`, `--yes`.
+
+In `spool chat`, mutating tools prompt for confirmation unless `--yes` is set.
+Slash commands: `/status`, `/explain`, `/heal`, `/tunnel`, `/nuke`,
+`/nuke-confirm`, `/clear`, `/help`.
+
+---
+
+## Architecture
+
+```
+cmd/                 Cobra commands and the chat/dashboard entrypoints
+internal/
+  domain/            Pure types, interfaces, typed error taxonomy
+  safefs/            Symlink-resolved jail, atomic writes, guarded deletes
+  config/            config.json + dotenv + OS env resolution
+  git/               URL/branch/subdir parsing, shallow clone, PAT via env
+  scanner/           Node (incl. monorepo), Python, Go, Rust detection
+  envvar/            Source + dotenv + Pydantic discovery, crypto/rand secrets
+  infra/             Backing-service inference + cloud suppression + ports
+  portprobe/         Host socket prober + concurrency-safe allocator
+  reconciler/        App port assignment + start-command/URL wiring
+  generator/         Multi-stage Dockerfiles + portable compose + dockerignore
+  graph/             Deterministic dependency DAG + topological start order
+  docker/            Single os/exec boundary for compose
+  httpcheck/         Real HTTP readiness probes
+  llm/               Zero-SDK multi-provider client + native tool calling
+  healer/            Failure analysis, deterministic rules, invariants, provenance
+  agent/             Typed tool registry, state machine, guardrails
+  tunnel/            cloudflared / localhost.run manager
+  dashboard/         Bubble Tea TUI
+  state/             Atomic per-project locks, env, overrides, provenance
+```
+
+Design rules:
+
+- **One boundary per external system**: `docker/` for containers, `git/` for
+  clones, `llm/` for providers, `safefs/` for the filesystem.
+- **Determinism**: map keys are sorted before rendering or validation; compose
+  and `.env` output are stable and diff-friendly.
+- **Honest results**: health failures surface as errors; the healer never prints
+  a success banner for a broken stack.
+
+### Security model
+
+- The repository clone is the only directory the agent can read, and it is
+  resolved through `safefs.Jail` (symlink-aware, `..`-proof, 1 MiB read cap).
+- The healer can only write `Dockerfile.*`, `docker-compose.yml`, and
+  `.dockerignore` inside the generated workspace.
+- LLM patches are validated against invariants: no disabling type checks, no
+  removing healthchecks, no `CMD sleep`, no removing install steps, no absolute
+  compose paths, and no unbounded rewrites.
+- Every applied patch is recorded in `repairs.json` with before/after SHA-256.
+- Git tokens are passed via `GIT_CONFIG_*` environment variables, never argv,
+  and are scrubbed from error output.
+
+---
+
+## Development
+
+```bash
+make fmt
+make vet
+make test
+make race
+make build
+```
+
+State lives under `~/.spool/`:
+
+```
+~/.spool/
+├── config.json          # 0600
+├── repos/<id>/          # shallow clones
+└── projects/<id>/
+    ├── spool.lock.json  # 0600
+    ├── .env             # 0600
+    ├── env-overrides.json
+    ├── repairs.json
+    ├── docker-compose.yml
+    └── Dockerfile.<svc>
+```
+
+## License
+
+MIT

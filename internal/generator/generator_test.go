@@ -151,3 +151,25 @@ func TestDockerignore(t *testing.T) {
 		}
 	}
 }
+
+func TestPythonPyprojectDependencyOnlyInstallsDeps(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "pyproject.toml"), []byte(`[project]
+name = "api"
+dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := &domain.Service{
+		Name: "api", Path: ".", Language: domain.LangPython, Framework: domain.FrameworkFastAPI,
+		PackageManager: domain.PMPip, StartCmd: "uvicorn main:app --host 0.0.0.0 --port 8000",
+		Port: 8000, HostPort: 8000, Dependencies: []string{"fastapi", "uvicorn"},
+	}
+	out := GenerateDockerfile(svc, Options{RepoRoot: repo})
+	if strings.Contains(out, "pip install .") {
+		t.Fatalf("must not pip install a dependency-only pyproject:\n%s", out)
+	}
+	if !strings.Contains(out, "'fastapi>=0.110'") || !strings.Contains(out, "'uvicorn[standard]>=0.29'") {
+		t.Fatalf("expected declared dependencies:\n%s", out)
+	}
+}
